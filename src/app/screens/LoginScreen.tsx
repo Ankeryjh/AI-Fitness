@@ -1,28 +1,30 @@
 import React, {useMemo, useState} from 'react';
-import {
-  Pressable,
-  SafeAreaView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import {Pressable, SafeAreaView, StyleSheet, Text, TextInput, View} from 'react-native';
 
 import {useOnboardingStore} from '../store/onboardingStore';
+
+type AuthMode = 'login' | 'register';
 
 export const LoginScreen = (): React.JSX.Element => {
   const login = useOnboardingStore(state => state.login);
 
+  const [mode, setMode] = useState<AuthMode>('login');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
-  const [rememberMe, setRememberMe] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(true);
 
-  const disabled = useMemo(
-    () => account.trim().length === 0 || password.trim().length === 0,
-    [account, password],
-  );
+  const disabled = useMemo(() => {
+    if (account.trim().length === 0 || password.trim().length === 0) {
+      return true;
+    }
+    if (mode === 'register' && confirmPassword.trim() !== password.trim()) {
+      return true;
+    }
+    return false;
+  }, [account, confirmPassword, mode, password]);
 
-  const onLogin = () => {
+  const onSubmit = () => {
     if (disabled) {
       return;
     }
@@ -38,6 +40,15 @@ export const LoginScreen = (): React.JSX.Element => {
             <View style={styles.sloganLine} />
             <Text style={styles.sloganText}>极简健身助手</Text>
           </View>
+        </View>
+
+        <View style={styles.modeTabs}>
+          <Pressable onPress={() => setMode('login')} style={styles.modeTab}>
+            <Text style={[styles.modeText, mode === 'login' && styles.modeTextActive]}>登录</Text>
+          </Pressable>
+          <Pressable onPress={() => setMode('register')} style={styles.modeTab}>
+            <Text style={[styles.modeText, mode === 'register' && styles.modeTextActive]}>注册</Text>
+          </Pressable>
         </View>
 
         <View style={styles.form}>
@@ -62,6 +73,19 @@ export const LoginScreen = (): React.JSX.Element => {
             secureTextEntry
           />
 
+          {mode === 'register' ? (
+            <TextInput
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              style={styles.input}
+              placeholder="确认密码"
+              placeholderTextColor="#9DA4B0"
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+            />
+          ) : null}
+
           <View style={styles.optionRow}>
             <Pressable style={styles.rememberWrap} onPress={() => setRememberMe(prev => !prev)}>
               <View style={[styles.checkBox, rememberMe && styles.checkBoxActive]}>
@@ -71,22 +95,22 @@ export const LoginScreen = (): React.JSX.Element => {
             </Pressable>
 
             <Pressable>
-              <Text style={styles.optionText}>忘记密码?</Text>
+              <Text style={styles.optionText}>{mode === 'login' ? '忘记密码?' : '服务条款'}</Text>
             </Pressable>
           </View>
 
           <Pressable
-            onPress={onLogin}
+            onPress={onSubmit}
             style={[styles.loginButton, disabled && styles.loginButtonDisabled]}
             disabled={disabled}>
-            <Text style={styles.loginButtonText}>进入应用  →</Text>
+            <Text style={styles.loginButtonText}>{mode === 'login' ? '进入应用  →' : '创建账号  →'}</Text>
           </Pressable>
         </View>
 
         <View style={styles.socialBlock}>
           <View style={styles.thirdTitleRow}>
             <View style={styles.thirdLine} />
-            <Text style={styles.thirdTitle}>第三方登录</Text>
+            <Text style={styles.thirdTitle}>快速登录</Text>
             <View style={styles.thirdLine} />
           </View>
 
@@ -99,13 +123,6 @@ export const LoginScreen = (): React.JSX.Element => {
             </Pressable>
             <Pressable style={styles.socialButton}>
               <Text style={styles.socialIcon}>···</Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.registerRow}>
-            <Text style={styles.registerText}>还没有账号?</Text>
-            <Pressable>
-              <Text style={styles.registerLink}> 立即注册</Text>
             </Pressable>
           </View>
         </View>
@@ -127,7 +144,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   brandBlock: {
-    marginTop: 74,
+    marginTop: 66,
   },
   logo: {
     fontSize: 56,
@@ -153,8 +170,26 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.9,
   },
+  modeTabs: {
+    marginTop: 24,
+    flexDirection: 'row',
+    gap: 24,
+  },
+  modeTab: {
+    paddingBottom: 6,
+  },
+  modeText: {
+    color: '#A0A8B5',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  modeTextActive: {
+    color: '#0A0A0A',
+    borderBottomWidth: 2,
+    borderBottomColor: '#0A0A0A',
+  },
   form: {
-    marginTop: 56,
+    marginTop: 26,
     gap: 14,
   },
   input: {
@@ -178,14 +213,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   checkBox: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 7,
     borderWidth: 2,
     borderColor: '#C7CDD7',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 10,
     backgroundColor: '#F5F6F8',
   },
   checkBoxActive: {
@@ -194,7 +229,7 @@ const styles = StyleSheet.create({
   },
   checkMark: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: '700',
   },
   optionText: {
@@ -203,7 +238,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   loginButton: {
-    marginTop: 24,
+    marginTop: 20,
     height: 64,
     borderRadius: 16,
     backgroundColor: '#000000',
@@ -215,18 +250,18 @@ const styles = StyleSheet.create({
   },
   loginButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '800',
     letterSpacing: 0.4,
   },
   socialBlock: {
     marginTop: 'auto',
-    paddingBottom: 26,
+    paddingBottom: 30,
   },
   thirdTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 28,
+    marginBottom: 24,
     gap: 14,
   },
   thirdLine: {
@@ -258,23 +293,6 @@ const styles = StyleSheet.create({
     color: '#1A2437',
     fontSize: 17,
     fontWeight: '700',
-  },
-  registerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 30,
-  },
-  registerText: {
-    color: '#6E7787',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  registerLink: {
-    color: '#151515',
-    fontSize: 14,
-    fontWeight: '700',
-    textDecorationLine: 'underline',
   },
   homeIndicator: {
     alignSelf: 'center',

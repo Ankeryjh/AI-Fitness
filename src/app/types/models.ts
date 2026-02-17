@@ -22,6 +22,8 @@ export interface SessionExercise {
   id: string;
   sessionId: string;
   exerciseId: string;
+  customName?: string;
+  targetSets?: number;
   restSecOverride?: number;
   sets: SetRecord[];
 }

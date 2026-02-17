@@ -13,12 +13,15 @@ interface OnboardingState {
   hasHydrated: boolean;
   isLoggedIn: boolean;
   hasCompletedGoalSetup: boolean;
+  startSessionAfterGoalSetup: boolean;
   email: string;
   goalSetup: GoalSetup;
   setHasHydrated: (value: boolean) => void;
   login: (email: string) => void;
   logout: () => void;
   completeGoalSetup: (payload: GoalSetup) => void;
+  requestStartSession: () => void;
+  clearStartSessionRequest: () => void;
 }
 
 const defaultGoalSetup: GoalSetup = {
@@ -31,6 +34,7 @@ export const useOnboardingStore = create<OnboardingState>()(
       hasHydrated: false,
       isLoggedIn: false,
       hasCompletedGoalSetup: false,
+      startSessionAfterGoalSetup: false,
       email: '',
       goalSetup: defaultGoalSetup,
       setHasHydrated: value => set({hasHydrated: value}),
@@ -39,6 +43,7 @@ export const useOnboardingStore = create<OnboardingState>()(
         set({
           isLoggedIn: false,
           hasCompletedGoalSetup: false,
+          startSessionAfterGoalSetup: false,
           email: '',
           goalSetup: defaultGoalSetup,
         }),
@@ -49,6 +54,8 @@ export const useOnboardingStore = create<OnboardingState>()(
             goalType: payload.goalType,
           },
         }),
+      requestStartSession: () => set({startSessionAfterGoalSetup: true}),
+      clearStartSessionRequest: () => set({startSessionAfterGoalSetup: false}),
     }),
     {
       name: 'onboarding-store',

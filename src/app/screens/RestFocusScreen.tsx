@@ -1,298 +1,287 @@
-import React, {useEffect, useMemo, useRef, useState} from 'react';
+import React, {useEffect, useMemo, useState} from 'react';
 import {
   Pressable,
   SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  Vibration,
   View,
 } from 'react-native';
 import {NativeStackScreenProps} from '@react-navigation/native-stack';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
 
-import {SecondaryButton} from '../components/SecondaryButton';
-import {SetLogRow} from '../components/SetLogRow';
-import {TimerRing} from '../components/TimerRing';
 import {RootStackParamList} from '../navigation/RootNavigator';
+import {formatClockFixed} from '../services/format';
 import {useRestStore} from '../store/restStore';
 import {useSessionStore} from '../store/sessionStore';
-import {useSettingsStore} from '../store/settingsStore';
-import {formatClock} from '../services/format';
-import {colors, radii, sizes, spacing} from '../theme/tokens';
-import {PrimaryButton} from '../components/PrimaryButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'RestFocus'>;
+type FocusTab = 'record' | 'knowledge';
 
-const parseOptionalNumber = (text: string): number | undefined => {
-  if (!text.trim()) {
-    return undefined;
-  }
-  const parsed = Number(text);
+const parseNumber = (value: string): number | undefined => {
+  const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return undefined;
   }
   return parsed;
 };
 
+const knowledgeArticles = [
+  {
+    title: '增肌核心原则：机械张力优先',
+    summary:
+      '稳定进步来自“渐进超负荷”。在动作标准前提下，每 1~2 周提升总容量，优先增加重量，再补充组数。',
+  },
+  {
+    title: '训练后补给窗口',
+    summary:
+      '建议在训练后 1 小时内摄入蛋白质 25~40g，并搭配碳水帮助恢复糖原。若晚间训练，补给仍需完成。',
+  },
+  {
+    title: '休息长度与表现关系',
+    summary:
+      '大重量复合动作休息 90~180 秒更有利于维持组间输出；孤立动作可缩短至 45~90 秒提高密度。',
+  },
+];
+
 export const RestFocusScreen = ({navigation, route}: Props): React.JSX.Element => {
   const sessionExerciseId = route.params.sessionExerciseId;
+
   const sessions = useSessionStore(state => state.sessions);
   const exercises = useSessionStore(state => state.exercises);
-  const completeSet = useSessionStore(state => state.completeSet);
+  const updateSetRecord = useSessionStore(state => state.updateSetRecord);
   const startNextSet = useSessionStore(state => state.startNextSet);
 
-  const defaultRestSec = useSettingsStore(state => state.defaultRestSec);
-  const stepSec = useSettingsStore(state => state.stepSec);
-  const soundEnabled = useSettingsStore(state => state.soundEnabled);
-  const vibrationEnabled = useSettingsStore(state => state.vibrationEnabled);
-
   const restState = useRestStore(state => state.restState);
-  const restDurationSec = useRestStore(state => state.restDurationSec);
-  const activeSessionExerciseId = useRestStore(state => state.activeSessionExerciseId);
-  const startRest = useRestStore(state => state.startRest);
-  const pauseRest = useRestStore(state => state.pauseRest);
-  const resumeRest = useRestStore(state => state.resumeRest);
-  const addTime = useRestStore(state => state.addTime);
-  const markDoneIfNeeded = useRestStore(state => state.markDoneIfNeeded);
   const getRemainingMs = useRestStore(state => state.getRemainingMs);
+  const markDoneIfNeeded = useRestStore(state => state.markDoneIfNeeded);
   const resetToIdle = useRestStore(state => state.resetToIdle);
+  const activeSessionExerciseId = useRestStore(state => state.activeSessionExerciseId);
+
+  const [tab, setTab] = useState<FocusTab>('record');
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [analysisVisible, setAnalysisVisible] = useState(false);
 
   const snapshot = useMemo(() => {
     for (const session of sessions) {
-      const item = session.items.find(ex => ex.id === sessionExerciseId);
+      const item = session.items.find(entry => entry.id === sessionExerciseId);
       if (!item) {
         continue;
       }
-
       return {
         item,
-        exercise: exercises.find(exercise => exercise.id === item.exerciseId),
+        exercise: exercises.find(entry => entry.id === item.exerciseId),
       };
     }
     return null;
   }, [exercises, sessionExerciseId, sessions]);
 
-  const [weightInput, setWeightInput] = useState('');
-  const [repsInput, setRepsInput] = useState('');
-  const [nowMs, setNowMs] = useState(Date.now());
+  const latestSet = snapshot?.item.sets[snapshot.item.sets.length - 1];
+  const displayName =
+    snapshot?.item.customName?.trim() || snapshot?.exercise?.name || '胸部训练';
 
-  const pulseScale = useSharedValue(1);
-  const numberScale = useSharedValue(1);
-  const previousStateRef = useRef(restState);
-
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{scale: pulseScale.value}],
-  }));
-
-  const numberStyle = useAnimatedStyle(() => ({
-    transform: [{scale: numberScale.value}],
-  }));
+  const [weightInput, setWeightInput] = useState(latestSet?.weight?.toString() ?? '');
+  const [repsInput, setRepsInput] = useState(latestSet?.reps?.toString() ?? '');
 
   useEffect(() => {
     const timer = setInterval(() => {
       const now = Date.now();
       setNowMs(now);
-      useRestStore.getState().markDoneIfNeeded(now);
+      markDoneIfNeeded(now);
     }, 250);
-
     return () => clearInterval(timer);
   }, [markDoneIfNeeded]);
 
   useEffect(() => {
-    const prev = previousStateRef.current;
+    setWeightInput(latestSet?.weight?.toString() ?? '');
+    setRepsInput(latestSet?.reps?.toString() ?? '');
+  }, [latestSet?.id, latestSet?.reps, latestSet?.weight]);
 
-    if (
-      activeSessionExerciseId === sessionExerciseId &&
-      restState === 'DONE' &&
-      prev !== 'DONE'
-    ) {
-      pulseScale.value = withSequence(
-        withTiming(1.03, {duration: 130}),
-        withTiming(1, {duration: 130}),
-      );
-      if (vibrationEnabled) {
-        Vibration.vibrate(120);
-      }
-    }
-
-    previousStateRef.current = restState;
-  }, [activeSessionExerciseId, pulseScale, restState, sessionExerciseId, vibrationEnabled]);
-
-  if (!snapshot) {
+  if (!snapshot || !latestSet) {
     return (
       <SafeAreaView style={styles.safeArea}>
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>Exercise not found</Text>
-          <PrimaryButton label="Back" onPress={() => navigation.goBack()} />
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>没有可记录的休息数据</Text>
+          <Pressable style={styles.blackButton} onPress={() => navigation.navigate('Session')}>
+            <Text style={styles.blackButtonText}>返回训练中</Text>
+          </Pressable>
         </View>
       </SafeAreaView>
     );
   }
 
-  const isActiveTimerForThisExercise = activeSessionExerciseId === sessionExerciseId;
-  const timerState = isActiveTimerForThisExercise ? restState : 'IDLE';
-  const blockedByOtherTimer =
-    activeSessionExerciseId !== null &&
-    activeSessionExerciseId !== sessionExerciseId &&
-    restState !== 'IDLE';
+  const isTimerCurrent = activeSessionExerciseId === sessionExerciseId && restState !== 'IDLE';
+  const remainingSec = isTimerCurrent ? Math.max(0, Math.ceil(getRemainingMs(nowMs) / 1000)) : 0;
+  const timerDone = isTimerCurrent && restState === 'DONE';
+  const setCount = snapshot.item.sets.length;
 
-  const exerciseName = snapshot.exercise?.name ?? 'Exercise';
-  const sets = snapshot.item.sets;
-  const lastSet = sets[sets.length - 1];
-
-  const configuredDurationSec =
-    snapshot.item.restSecOverride ?? snapshot.exercise?.defaultRestSec ?? defaultRestSec;
-
-  const totalMs = (isActiveTimerForThisExercise ? restDurationSec : configuredDurationSec) * 1000;
-  const remainingMs = isActiveTimerForThisExercise ? getRemainingMs(nowMs) : configuredDurationSec * 1000;
-
-  const progress =
-    timerState === 'IDLE' ? 0 : Math.max(0, Math.min(1, (totalMs - Math.max(0, remainingMs)) / totalMs));
-
-  const displayTimerText =
-    remainingMs >= 0
-      ? formatClock(Math.ceil(remainingMs / 1000))
-      : `+${Math.abs(Math.floor(remainingMs / 1000))}s`;
-
-  const onCompleteSet = async () => {
-    const now = Date.now();
-
-    completeSet({
+  const onSaveRecord = () => {
+    updateSetRecord({
       sessionExerciseId,
-      endedAtMs: now,
-      weight: parseOptionalNumber(weightInput),
-      reps: parseOptionalNumber(repsInput),
+      setId: latestSet.id,
+      weight: parseNumber(weightInput),
+      reps: parseNumber(repsInput),
+      rpe: latestSet.rpe,
+      note: latestSet.note,
     });
-
-    await startRest({
-      durationSec: configuredDurationSec,
-      sessionExerciseId,
-      exerciseName,
-      soundEnabled,
-      vibrationEnabled,
-    });
+    setAnalysisVisible(true);
   };
 
   const onStartNextSet = async () => {
-    startNextSet({
-      sessionExerciseId,
-      startedAtMs: Date.now(),
-    });
-
+    startNextSet({sessionExerciseId, startedAtMs: Date.now()});
     await resetToIdle();
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    navigation.navigate('Session', {sessionExerciseId});
   };
 
-  const onAddTime = () => {
-    addTime(stepSec);
-    numberScale.value = withSequence(
-      withTiming(1.05, {duration: 80}),
-      withTiming(1, {duration: 80}),
-    );
-  };
+  const aiTip = useMemo(() => {
+    const weight = parseNumber(weightInput) ?? 0;
+    const reps = parseNumber(repsInput) ?? 0;
 
-  const setLabel = `Set ${sets.length + (timerState === 'IDLE' ? 1 : 0)}`;
-  const lastSetMeta = lastSet
-    ? `Last ${lastSet.weight ?? '--'}kg x ${lastSet.reps ?? '--'}`
-    : 'Last --';
-
-  const pauseLabel = timerState === 'PAUSED' ? 'Resume' : 'Pause';
-  const pauseDisabled = timerState === 'IDLE' || timerState === 'DONE' || blockedByOtherTimer;
-  const mainLabel = timerState === 'IDLE' ? 'Complete Set' : 'Start Next Set';
-
-  const onMainPress = timerState === 'IDLE' ? onCompleteSet : onStartNextSet;
+    if (reps >= 12) {
+      return `本组完成度很高。建议下组尝试 ${Math.max(2, Math.round(weight * 0.05))}kg 渐进增加。`;
+    }
+    if (reps <= 6) {
+      return '动作接近力竭，建议休息延长 15~30 秒，维持动作质量。';
+    }
+    return '当前表现稳定，保持重量，下一组争取多 1 次重复。';
+  }, [repsInput, weightInput]);
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <View style={styles.container}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Pressable onPress={() => navigation.goBack()}>
-            <Text style={styles.back}>Back</Text>
+          <Pressable onPress={() => navigation.goBack()} style={styles.iconButton}>
+            <Text style={styles.iconText}>‹</Text>
           </Pressable>
           <View style={styles.headerCenter}>
-            <Text style={styles.exerciseTitle}>{exerciseName}</Text>
-            <Text style={styles.headerMeta}>{`${setLabel} / ${lastSetMeta}`}</Text>
+            <Text style={styles.overline}>CURRENT SESSION</Text>
+            <Text style={styles.headerTitle}>{displayName}</Text>
           </View>
-          <View style={styles.headerSpacer} />
+          <Pressable style={styles.iconButton}>
+            <Text style={styles.more}>•••</Text>
+          </Pressable>
         </View>
 
-        {blockedByOtherTimer ? (
-          <View style={styles.banner}>
-            <Text style={styles.bannerText}>Another exercise timer is running. Finish it first.</Text>
+        <View style={styles.topMeta}>
+          <View>
+            <Text style={styles.metaLabel}>当前组数</Text>
+            <Text style={styles.metaMain}>
+              <Text style={styles.metaMainStrong}>{`SET ${String(setCount).padStart(2, '0')}`}</Text>
+              <Text style={styles.metaMainLight}> / 05</Text>
+            </Text>
           </View>
-        ) : null}
-
-        <Animated.View style={[styles.ringWrapper, pulseStyle]}>
-          <TimerRing progress={progress} done={timerState === 'DONE'} />
-          <Animated.Text
-            style={[
-              styles.timerText,
-              timerState === 'DONE' && styles.timerDone,
-              numberStyle,
-            ]}>
-            {displayTimerText}
-          </Animated.Text>
-        </Animated.View>
-
-        <View style={styles.inputRow}>
-          <TextInput
-            value={weightInput}
-            onChangeText={setWeightInput}
-            placeholder="Weight (kg)"
-            placeholderTextColor={colors.textSecondary}
-            keyboardType="decimal-pad"
-            style={styles.input}
-          />
-          <TextInput
-            value={repsInput}
-            onChangeText={setRepsInput}
-            placeholder="Reps"
-            placeholderTextColor={colors.textSecondary}
-            keyboardType="number-pad"
-            style={styles.input}
-          />
+          <View style={styles.timerPill}>
+            <Text style={styles.timerPillText}>{`⏱  ${formatClockFixed(remainingSec)}`}</Text>
+          </View>
         </View>
 
-        <View style={styles.controls}>
-          <SecondaryButton
-            label={`+${stepSec}s`}
-            onPress={onAddTime}
-            disabled={timerState === 'IDLE' || blockedByOtherTimer}
-            style={styles.sideButton}
-          />
+        <View style={styles.divider} />
 
-          <PrimaryButton
-            label={mainLabel}
-            onPress={onMainPress}
-            disabled={blockedByOtherTimer}
-            style={styles.mainButton}
-          />
-
-          <SecondaryButton
-            label={pauseLabel}
-            onPress={timerState === 'PAUSED' ? resumeRest : pauseRest}
-            disabled={pauseDisabled}
-            style={styles.sideButton}
-          />
+        <View style={styles.segmentWrap}>
+          <Pressable onPress={() => setTab('record')} style={[styles.segment, tab === 'record' && styles.segmentActive]}>
+            <Text style={[styles.segmentText, tab === 'record' && styles.segmentTextActive]}>休息记录</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setTab('knowledge')}
+            style={[styles.segment, tab === 'knowledge' && styles.segmentActive]}>
+            <Text style={[styles.segmentText, tab === 'knowledge' && styles.segmentTextActive]}>休息科普</Text>
+          </Pressable>
         </View>
 
-        <View style={styles.logSection}>
-          <Text style={styles.logTitle}>Recent Sets</Text>
-          {sets.length === 0 ? (
-            <Text style={styles.emptyLog}>No set records yet</Text>
-          ) : (
-            sets
-              .slice(-3)
+        {tab === 'record' ? (
+          <>
+            <Text style={styles.fieldLabel}>训练动作</Text>
+            <View style={styles.fieldBox}>
+              <Text style={styles.fieldValue}>{displayName}</Text>
+            </View>
+
+            <View style={styles.dataRow}>
+              <View style={styles.dataBox}>
+                <Text style={styles.fieldLabel}>重量</Text>
+                <TextInput
+                  value={weightInput}
+                  onChangeText={setWeightInput}
+                  style={styles.bigInput}
+                  keyboardType="decimal-pad"
+                  placeholder="80"
+                  placeholderTextColor="#C0C7D2"
+                />
+                <Text style={styles.unit}>KG</Text>
+              </View>
+              <View style={styles.dataBox}>
+                <Text style={styles.fieldLabel}>次数</Text>
+                <TextInput
+                  value={repsInput}
+                  onChangeText={setRepsInput}
+                  style={styles.bigInput}
+                  keyboardType="number-pad"
+                  placeholder="8"
+                  placeholderTextColor="#C0C7D2"
+                />
+                <Text style={styles.unit}>REPS</Text>
+              </View>
+            </View>
+
+            <Pressable style={styles.blackButton} onPress={onSaveRecord}>
+              <Text style={styles.blackButtonText}>✦  AI 分析表现</Text>
+            </Pressable>
+
+            {analysisVisible ? (
+              <View style={styles.aiCard}>
+                <Text style={styles.aiTitle}>实时分析</Text>
+                <Text style={styles.aiText}>{aiTip}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.sectionTitle}>历史记录</Text>
+            {snapshot.item.sets
+              .slice()
               .reverse()
-              .map(record => <SetLogRow key={record.id} setRecord={record} />)
-          )}
-        </View>
-      </View>
+              .map(record => (
+                <View key={record.id} style={styles.historyItem}>
+                  <View style={styles.historyBadge}>
+                    <Text style={styles.historyBadgeText}>{String(record.index).padStart(2, '0')}</Text>
+                  </View>
+                  <View style={styles.historyBody}>
+                    <Text style={styles.historySet}>{`${record.weight ?? '--'} KG × ${record.reps ?? '--'}`}</Text>
+                    <Text style={styles.historySub}>
+                      {record.index === 1 ? 'WARMUP' : `REST ${record.restActualSec ?? '--'}s`}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+
+            <Pressable
+              style={styles.lightButton}
+              onPress={() => navigation.navigate('RestStats', {sessionExerciseId})}>
+              <Text style={styles.lightButtonText}>查看已休息组数统计</Text>
+            </Pressable>
+          </>
+        ) : (
+          <View style={styles.knowledgeWrap}>
+            <Text style={styles.sectionTitle}>硬核干货</Text>
+            {knowledgeArticles.map(article => (
+              <View key={article.title} style={styles.articleCard}>
+                <Text style={styles.articleTitle}>{article.title}</Text>
+                <Text style={styles.articleSummary}>{article.summary}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        <Pressable
+          style={[styles.blackButton, !timerDone && styles.blackButtonDisabled]}
+          onPress={onStartNextSet}
+          disabled={!timerDone}>
+          <Text style={styles.blackButtonText}>{timerDone ? '开始下一组  →' : '等待倒计时结束...'}</Text>
+        </Pressable>
+
+        <View style={styles.homeIndicator} />
+      </ScrollView>
     </SafeAreaView>
   );
 };
@@ -300,120 +289,307 @@ export const RestFocusScreen = ({navigation, route}: Props): React.JSX.Element =
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: '#F5F6F8',
   },
   container: {
     flex: 1,
-    backgroundColor: colors.background,
-    paddingHorizontal: spacing.pageX,
-    paddingTop: spacing.sm,
+    backgroundColor: '#F5F6F8',
+  },
+  content: {
+    paddingHorizontal: 22,
+    paddingBottom: 24,
+    gap: 12,
   },
   header: {
+    marginTop: 4,
+    height: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  iconButton: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconText: {
+    color: '#111111',
+    fontSize: 34,
+    lineHeight: 34,
+    fontWeight: '300',
+  },
+  more: {
+    color: '#111111',
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  overline: {
+    color: '#9DA5B3',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.8,
+  },
+  headerTitle: {
+    marginTop: 2,
+    color: '#090909',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  topMeta: {
+    marginTop: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  back: {
-    color: colors.textPrimary,
-    fontSize: 16,
-    fontWeight: '600',
+  metaLabel: {
+    color: '#9BA3B1',
+    fontSize: 14,
+    fontWeight: '700',
   },
-  headerCenter: {
-    alignItems: 'center',
-    gap: 2,
+  metaMain: {
+    marginTop: 4,
   },
-  headerSpacer: {
-    width: 40,
+  metaMainStrong: {
+    color: '#090909',
+    fontSize: 60,
+    lineHeight: 62,
+    fontWeight: '900',
+    fontStyle: 'italic',
   },
-  exerciseTitle: {
-    color: colors.textPrimary,
+  metaMainLight: {
+    color: '#BCC3CE',
     fontSize: 24,
     fontWeight: '700',
   },
-  headerMeta: {
-    color: colors.textSecondary,
-    fontSize: 13,
-  },
-  banner: {
-    marginTop: spacing.md,
-    borderRadius: radii.card,
-    backgroundColor: colors.surfaceMuted,
-    padding: spacing.sm,
-  },
-  bannerText: {
-    color: colors.textSecondary,
-    fontSize: 13,
-  },
-  ringWrapper: {
-    marginTop: spacing.lg,
+  timerPill: {
+    minWidth: 128,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 320,
+    paddingHorizontal: 14,
   },
-  timerText: {
-    position: 'absolute',
-    fontSize: sizes.timerNumber,
-    fontWeight: '700',
-    color: colors.textPrimary,
+  timerPillText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.8,
   },
-  timerDone: {
-    color: colors.danger,
+  divider: {
+    marginTop: 10,
+    marginBottom: 6,
+    height: 1,
+    backgroundColor: '#E1E5EC',
   },
-  inputRow: {
+  segmentWrap: {
     flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
+    gap: 10,
+    marginBottom: 8,
   },
-  input: {
+  segment: {
     flex: 1,
-    borderRadius: radii.card,
+    height: 42,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: colors.divider,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    color: colors.textPrimary,
-    fontSize: 16,
+    borderColor: '#D6DBE3',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  controls: {
+  segmentActive: {
+    backgroundColor: '#000000',
+    borderColor: '#000000',
+  },
+  segmentText: {
+    color: '#7C8798',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  segmentTextActive: {
+    color: '#FFFFFF',
+  },
+  fieldLabel: {
+    color: '#9CA5B3',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  fieldBox: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#E1E5EC',
+    borderRadius: 0,
+    minHeight: 82,
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+    backgroundColor: '#F5F6F8',
+  },
+  fieldValue: {
+    color: '#090909',
+    fontSize: 26,
+    fontWeight: '900',
+  },
+  dataRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    gap: 14,
+  },
+  dataBox: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E1E5EC',
+    padding: 12,
+    minHeight: 126,
+  },
+  bigInput: {
+    marginTop: 8,
+    color: '#090909',
+    fontSize: 44,
+    fontWeight: '900',
+    padding: 0,
+  },
+  unit: {
+    alignSelf: 'flex-end',
+    color: '#9DA5B3',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  blackButton: {
+    marginTop: 10,
+    height: 72,
+    borderRadius: 18,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  blackButtonDisabled: {
+    opacity: 0.5,
+  },
+  blackButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  aiCard: {
+    marginTop: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#DCE1EA',
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  aiTitle: {
+    color: '#111A2A',
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  aiText: {
+    color: '#576378',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  sectionTitle: {
+    marginTop: 14,
+    color: '#121924',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  historyItem: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E1E5EC',
+    borderRadius: 16,
+    padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: 12,
+    backgroundColor: '#FFFFFF',
   },
-  sideButton: {
+  historyBadge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#0A0A0A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  historyBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  historyBody: {
     flex: 1,
-    minHeight: 56,
   },
-  mainButton: {
-    flex: 2,
+  historySet: {
+    color: '#0A0A0A',
+    fontSize: 36,
+    fontWeight: '900',
+    fontStyle: 'italic',
   },
-  logSection: {
-    marginTop: spacing.lg,
-    borderRadius: radii.card,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flex: 1,
-  },
-  logTitle: {
-    color: colors.textPrimary,
-    fontSize: 16,
+  historySub: {
+    marginTop: 2,
+    color: '#9AA2AF',
+    fontSize: 13,
     fontWeight: '700',
-    marginBottom: spacing.xs,
   },
-  emptyLog: {
-    color: colors.textSecondary,
+  lightButton: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  lightButtonText: {
+    color: '#7D8798',
     fontSize: 14,
-    paddingVertical: spacing.sm,
+    fontWeight: '700',
   },
-  emptyState: {
+  knowledgeWrap: {
+    marginTop: 4,
+  },
+  articleCard: {
+    marginTop: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E6ED',
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+  },
+  articleTitle: {
+    color: '#0F1625',
+    fontSize: 17,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+  articleSummary: {
+    color: '#556173',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  homeIndicator: {
+    alignSelf: 'center',
+    width: 130,
+    height: 4,
+    borderRadius: 3,
+    backgroundColor: '#E5E7EB',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  emptyWrap: {
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: spacing.pageX,
-    gap: spacing.md,
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 24,
   },
   emptyTitle: {
-    color: colors.textPrimary,
-    fontSize: 24,
+    color: '#111111',
+    fontSize: 20,
     fontWeight: '700',
   },
 });

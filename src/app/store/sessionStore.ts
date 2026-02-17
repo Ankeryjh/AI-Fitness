@@ -19,6 +19,25 @@ interface StartNextSetInput {
   startedAtMs?: number;
 }
 
+interface UpdateSetRecordInput {
+  sessionExerciseId: string;
+  setId: string;
+  weight?: number;
+  reps?: number;
+  rpe?: number;
+  note?: string;
+}
+
+interface UpdateSessionExerciseNameInput {
+  sessionExerciseId: string;
+  customName: string;
+}
+
+interface UpdateSessionExerciseTargetSetsInput {
+  sessionExerciseId: string;
+  targetSets: number;
+}
+
 interface SessionState {
   exercises: Exercise[];
   sessions: Session[];
@@ -29,9 +48,13 @@ interface SessionState {
     exerciseName: string,
     defaultRestSec: number,
     restSecOverride?: number,
+    targetSets?: number,
   ) => string | null;
   completeSet: (input: CompleteSetInput) => SetRecord | null;
   startNextSet: (input: StartNextSetInput) => SetRecord | null;
+  updateSetRecord: (input: UpdateSetRecordInput) => SetRecord | null;
+  updateSessionExerciseName: (input: UpdateSessionExerciseNameInput) => void;
+  updateSessionExerciseTargetSets: (input: UpdateSessionExerciseTargetSetsInput) => void;
 }
 
 const defaultExercises: Exercise[] = [
@@ -53,6 +76,13 @@ const findSessionExercise = (
   }
 
   return null;
+};
+
+const normalizeTargetSets = (value?: number): number => {
+  if (!Number.isFinite(value)) {
+    return 4;
+  }
+  return Math.max(1, Math.min(30, Math.round(value as number)));
 };
 
 export const useSessionStore = create<SessionState>()(
@@ -91,7 +121,7 @@ export const useSessionStore = create<SessionState>()(
           ),
         }));
       },
-      addExerciseToActiveSession: (exerciseName, defaultRestSec, restSecOverride) => {
+      addExerciseToActiveSession: (exerciseName, defaultRestSec, restSecOverride, targetSets) => {
         const activeSessionId = get().activeSessionId;
         if (!activeSessionId) {
           return null;
@@ -114,6 +144,7 @@ export const useSessionStore = create<SessionState>()(
           id: sessionExerciseId,
           sessionId: activeSessionId,
           exerciseId,
+          targetSets: normalizeTargetSets(targetSets),
           restSecOverride,
           sets: [],
         };
@@ -227,6 +258,107 @@ export const useSessionStore = create<SessionState>()(
         });
 
         return updatedSet;
+      },
+      updateSetRecord: ({sessionExerciseId, setId, weight, reps, rpe, note}) => {
+        const locate = findSessionExercise(get().sessions, sessionExerciseId);
+        if (!locate) {
+          return null;
+        }
+
+        let updatedSet: SetRecord | null = null;
+
+        set(state => {
+          const nextSessions = [...state.sessions];
+          const session = nextSessions[locate.sessionIndex];
+          const item = session.items[locate.itemIndex];
+          const setIndex = item.sets.findIndex(setRecord => setRecord.id === setId);
+
+          if (setIndex < 0) {
+            return state;
+          }
+
+          const target = item.sets[setIndex];
+          const patched: SetRecord = {
+            ...target,
+            weight,
+            reps,
+            rpe,
+            note,
+          };
+          updatedSet = patched;
+
+          const nextSets = [...item.sets];
+          nextSets[setIndex] = patched;
+
+          const nextItems = [...session.items];
+          nextItems[locate.itemIndex] = {
+            ...item,
+            sets: nextSets,
+          };
+
+          nextSessions[locate.sessionIndex] = {
+            ...session,
+            items: nextItems,
+          };
+
+          return {sessions: nextSessions};
+        });
+
+        return updatedSet;
+      },
+      updateSessionExerciseName: ({sessionExerciseId, customName}) => {
+        const locate = findSessionExercise(get().sessions, sessionExerciseId);
+        if (!locate) {
+          return;
+        }
+
+        set(state => {
+          const nextSessions = [...state.sessions];
+          const session = nextSessions[locate.sessionIndex];
+          const item = session.items[locate.itemIndex];
+
+          const nextItem: SessionExercise = {
+            ...item,
+            customName,
+          };
+
+          const nextItems = [...session.items];
+          nextItems[locate.itemIndex] = nextItem;
+
+          nextSessions[locate.sessionIndex] = {
+            ...session,
+            items: nextItems,
+          };
+
+          return {sessions: nextSessions};
+        });
+      },
+      updateSessionExerciseTargetSets: ({sessionExerciseId, targetSets}) => {
+        const locate = findSessionExercise(get().sessions, sessionExerciseId);
+        if (!locate) {
+          return;
+        }
+
+        set(state => {
+          const nextSessions = [...state.sessions];
+          const session = nextSessions[locate.sessionIndex];
+          const item = session.items[locate.itemIndex];
+
+          const nextItem: SessionExercise = {
+            ...item,
+            targetSets: normalizeTargetSets(targetSets),
+          };
+
+          const nextItems = [...session.items];
+          nextItems[locate.itemIndex] = nextItem;
+
+          nextSessions[locate.sessionIndex] = {
+            ...session,
+            items: nextItems,
+          };
+
+          return {sessions: nextSessions};
+        });
       },
     }),
     {

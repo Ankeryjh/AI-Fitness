@@ -1,24 +1,66 @@
 import {MMKV} from 'react-native-mmkv';
 
-export const mmkv = new MMKV({
-  id: 'ai-fitness-storage',
-});
+let mmkv: MMKV | null = null;
+const memoryStorage = new Map<string, string>();
+
+try {
+  mmkv = new MMKV({
+    id: 'ai-fitness-storage',
+  });
+} catch {
+  mmkv = null;
+}
+
+const safeSet = (name: string, value: string): void => {
+  if (mmkv) {
+    try {
+      mmkv.set(name, value);
+      return;
+    } catch {
+      // Fall back to memory storage when native storage is unavailable.
+    }
+  }
+  memoryStorage.set(name, value);
+};
+
+const safeGet = (name: string): string | null => {
+  if (mmkv) {
+    try {
+      const value = mmkv.getString(name);
+      return value ?? null;
+    } catch {
+      // Fall back to memory storage when native storage is unavailable.
+    }
+  }
+  return memoryStorage.get(name) ?? null;
+};
+
+const safeRemove = (name: string): void => {
+  if (mmkv) {
+    try {
+      mmkv.delete(name);
+      return;
+    } catch {
+      // Fall back to memory storage when native storage is unavailable.
+    }
+  }
+  memoryStorage.delete(name);
+};
 
 export const mmkvJSONStorage = {
   setItem: (name: string, value: string) => {
-    mmkv.set(name, value);
+    safeSet(name, value);
   },
   getItem: (name: string) => {
-    const value = mmkv.getString(name);
-    return value ?? null;
+    return safeGet(name);
   },
   removeItem: (name: string) => {
-    mmkv.delete(name);
+    safeRemove(name);
   },
 };
 
 export const loadJSON = <T>(key: string, fallback: T): T => {
-  const raw = mmkv.getString(key);
+  const raw = safeGet(key);
   if (!raw) {
     return fallback;
   }
@@ -31,5 +73,5 @@ export const loadJSON = <T>(key: string, fallback: T): T => {
 };
 
 export const saveJSON = <T>(key: string, value: T): void => {
-  mmkv.set(key, JSON.stringify(value));
+  safeSet(key, JSON.stringify(value));
 };

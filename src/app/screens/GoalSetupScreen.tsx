@@ -1,34 +1,57 @@
 import React, {useMemo, useState} from 'react';
-import {Pressable, SafeAreaView, StyleSheet, Text, View} from 'react-native';
+import {Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {useNavigation} from '@react-navigation/native';
 
+import {MuscleSymbolIcon, MuscleSymbolName} from '../components/MuscleSymbolIcon';
 import {GoalType, useOnboardingStore} from '../store/onboardingStore';
+import {useSessionStore} from '../store/sessionStore';
 
 interface GoalItem {
   type: GoalType;
   titleZh: string;
   titleEn: string;
-  icon: string;
+  iconSymbol: MuscleSymbolName;
 }
 
 const goalOptions: GoalItem[] = [
-  {type: 'chest', titleZh: '胸部', titleEn: 'CHEST', icon: '✖'},
-  {type: 'back', titleZh: '背部', titleEn: 'BACK', icon: 'T'},
-  {type: 'legs', titleZh: '腿部', titleEn: 'LEGS', icon: '⟂'},
-  {type: 'shoulders', titleZh: '肩部', titleEn: 'SHOULDERS', icon: 'Y'},
-  {type: 'arms', titleZh: '手臂', titleEn: 'ARMS', icon: '⤫'},
-  {type: 'core', titleZh: '核心', titleEn: 'CORE', icon: '◎'},
+  {type: 'chest', titleZh: '胸部', titleEn: 'CHEST', iconSymbol: 'fitness_center'},
+  {type: 'back', titleZh: '背部', titleEn: 'BACK', iconSymbol: 'accessibility_new'},
+  {type: 'legs', titleZh: '腿部', titleEn: 'LEGS', iconSymbol: 'directions_run'},
+  {type: 'shoulders', titleZh: '肩部', titleEn: 'SHOULDERS', iconSymbol: 'sports_gymnastics'},
+  {type: 'arms', titleZh: '手臂', titleEn: 'ARMS', iconSymbol: 'do_not_step'},
+  {type: 'core', titleZh: '核心', titleEn: 'CORE', iconSymbol: 'self_improvement'},
 ];
+
+interface GoalPreset {
+  exerciseName: string;
+  restSec: number;
+}
+
+const goalPresets: Record<GoalType, GoalPreset> = {
+  chest: {exerciseName: '杠铃卧推', restSec: 90},
+  back: {exerciseName: '高位下拉', restSec: 90},
+  legs: {exerciseName: '深蹲', restSec: 120},
+  shoulders: {exerciseName: '哑铃推举', restSec: 90},
+  arms: {exerciseName: '杠铃弯举', restSec: 75},
+  core: {exerciseName: '卷腹', restSec: 60},
+};
 
 export const GoalSetupScreen = (): React.JSX.Element => {
   const navigation = useNavigation();
   const logout = useOnboardingStore(state => state.logout);
   const storedGoalType = useOnboardingStore(state => state.goalSetup.goalType);
   const completeGoalSetup = useOnboardingStore(state => state.completeGoalSetup);
+  const requestStartSession = useOnboardingStore(state => state.requestStartSession);
+
+  const sessions = useSessionStore(state => state.sessions);
+  const activeSessionId = useSessionStore(state => state.activeSessionId);
+  const createSession = useSessionStore(state => state.createSession);
+  const addExerciseToActiveSession = useSessionStore(state => state.addExerciseToActiveSession);
 
   const [goalType, setGoalType] = useState<GoalType>(
     goalOptions.some(option => option.type === storedGoalType) ? storedGoalType : 'chest',
   );
+  const [confirmVisible, setConfirmVisible] = useState(false);
 
   const selectedGoal = useMemo(
     () => goalOptions.find(option => option.type === goalType) ?? goalOptions[0],
@@ -44,6 +67,40 @@ export const GoalSetupScreen = (): React.JSX.Element => {
   };
 
   const onStartTraining = () => {
+    setConfirmVisible(true);
+  };
+
+  const startTrainingSession = () => {
+    const preset = goalPresets[goalType];
+    let nextSessionExerciseId: string | null = null;
+
+    const currentActiveSession = sessions.find(session => session.id === activeSessionId);
+    if (currentActiveSession?.items[0]) {
+      nextSessionExerciseId = currentActiveSession.items[0].id;
+    } else {
+      if (!activeSessionId) {
+        createSession();
+      }
+      nextSessionExerciseId = addExerciseToActiveSession(
+        preset.exerciseName,
+        preset.restSec,
+        preset.restSec,
+        4,
+      );
+      if (!nextSessionExerciseId) {
+        const retryActiveSessionId = useSessionStore.getState().activeSessionId;
+        if (!retryActiveSessionId) {
+          createSession();
+        }
+        nextSessionExerciseId = useSessionStore
+          .getState()
+          .addExerciseToActiveSession(preset.exerciseName, preset.restSec, preset.restSec, 4);
+      }
+    }
+
+    if (nextSessionExerciseId) {
+      requestStartSession();
+    }
     completeGoalSetup({goalType});
   };
 
@@ -68,31 +125,40 @@ export const GoalSetupScreen = (): React.JSX.Element => {
         <Text style={styles.mainTitle}>今日目标</Text>
         <Text style={styles.mainSubtitle}>选择你要训练的肌群</Text>
 
-        <View style={styles.goalList}>
-          {goalOptions.map(option => {
-            const selected = option.type === goalType;
+        <ScrollView
+          style={styles.goalScroll}
+          contentContainerStyle={styles.goalScrollContent}
+          showsVerticalScrollIndicator={false}>
+          <View style={styles.goalList}>
+            {goalOptions.map(option => {
+              const selected = option.type === goalType;
 
-            return (
-              <Pressable
-                key={option.type}
-                onPress={() => setGoalType(option.type)}
-                style={styles.goalRow}>
-                <View style={[styles.iconWrap, selected && styles.iconWrapSelected]}>
-                  <Text style={[styles.iconText, selected && styles.iconTextSelected]}>{option.icon}</Text>
-                </View>
+              return (
+                <Pressable
+                  key={option.type}
+                  onPress={() => setGoalType(option.type)}
+                  style={styles.goalRow}>
+                  <View style={[styles.iconWrap, selected && styles.iconWrapSelected]}>
+                    <MuscleSymbolIcon
+                      symbol={option.iconSymbol}
+                      color={selected ? '#FFFFFF' : '#111111'}
+                      size={28}
+                    />
+                  </View>
 
-                <View style={styles.goalTextBlock}>
-                  <Text style={styles.goalZh}>{option.titleZh}</Text>
-                  <Text style={styles.goalEn}>{option.titleEn}</Text>
-                </View>
+                  <View style={styles.goalTextBlock}>
+                    <Text style={styles.goalZh}>{option.titleZh}</Text>
+                    <Text style={styles.goalEn}>{option.titleEn}</Text>
+                  </View>
 
-                <View style={selected ? styles.radioActive : styles.radioIdle}>
-                  {selected ? <View style={styles.radioInner} /> : null}
-                </View>
-              </Pressable>
-            );
-          })}
-        </View>
+                  <View style={selected ? styles.radioActive : styles.radioIdle}>
+                    {selected ? <View style={styles.radioInner} /> : null}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </View>
+        </ScrollView>
 
         <View style={styles.footer}>
           <Pressable style={styles.ctaButton} onPress={onStartTraining}>
@@ -100,10 +166,37 @@ export const GoalSetupScreen = (): React.JSX.Element => {
           </Pressable>
 
           <Text style={styles.lastWorkout}>◷  上次训练: 2天前 ({selectedGoal.titleZh})</Text>
+          <View style={styles.homeIndicator} />
         </View>
-
-        <View style={styles.homeIndicator} />
       </View>
+
+      <Modal
+        transparent
+        visible={confirmVisible}
+        animationType="fade"
+        onRequestClose={() => setConfirmVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>开始训练？</Text>
+            <Text style={styles.modalSubtitle}>{`目标肌群：${selectedGoal.titleZh}`}</Text>
+            <View style={styles.modalActions}>
+              <Pressable
+                style={[styles.modalButton, styles.modalCancel]}
+                onPress={() => setConfirmVisible(false)}>
+                <Text style={styles.modalCancelText}>再想想</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalButton, styles.modalConfirm]}
+                onPress={() => {
+                  setConfirmVisible(false);
+                  startTrainingSession();
+                }}>
+                <Text style={styles.modalConfirmText}>开始训练</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -118,6 +211,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F6F8',
     paddingHorizontal: 20,
     paddingTop: 4,
+  },
+  goalScroll: {
+    flex: 1,
+  },
+  goalScrollContent: {
+    paddingBottom: 8,
   },
   headerRow: {
     height: 54,
@@ -200,15 +299,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#090909',
     borderColor: '#090909',
   },
-  iconText: {
-    color: '#111111',
-    fontSize: 28,
-    lineHeight: 30,
-    fontWeight: '700',
-  },
-  iconTextSelected: {
-    color: '#FFFFFF',
-  },
   goalTextBlock: {
     flex: 1,
   },
@@ -251,8 +341,60 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
   },
   footer: {
-    marginTop: 'auto',
-    paddingTop: 22,
+    paddingTop: 16,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 20,
+  },
+  modalTitle: {
+    color: '#0B0B0B',
+    fontSize: 20,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  modalSubtitle: {
+    marginTop: 8,
+    color: '#8C93A1',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  modalActions: {
+    marginTop: 18,
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    height: 48,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCancel: {
+    backgroundColor: '#EEF1F5',
+  },
+  modalConfirm: {
+    backgroundColor: '#0A0A0A',
+  },
+  modalCancelText: {
+    color: '#4B5361',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  modalConfirmText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
   },
   ctaButton: {
     height: 70,
