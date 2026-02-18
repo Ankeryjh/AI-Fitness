@@ -1,8 +1,10 @@
 import React, {useMemo, useState} from 'react';
 import {Modal, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {useNavigation} from '@react-navigation/native';
+import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 
 import {MuscleSymbolIcon, MuscleSymbolName} from '../components/MuscleSymbolIcon';
+import {RootStackParamList} from '../navigation/RootNavigator';
 import {GoalType, useOnboardingStore} from '../store/onboardingStore';
 import {useSessionStore} from '../store/sessionStore';
 
@@ -37,11 +39,9 @@ const goalPresets: Record<GoalType, GoalPreset> = {
 };
 
 export const GoalSetupScreen = (): React.JSX.Element => {
-  const navigation = useNavigation();
-  const logout = useOnboardingStore(state => state.logout);
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const storedGoalType = useOnboardingStore(state => state.goalSetup.goalType);
   const completeGoalSetup = useOnboardingStore(state => state.completeGoalSetup);
-  const requestStartSession = useOnboardingStore(state => state.requestStartSession);
 
   const sessions = useSessionStore(state => state.sessions);
   const activeSessionId = useSessionStore(state => state.activeSessionId);
@@ -63,7 +63,7 @@ export const GoalSetupScreen = (): React.JSX.Element => {
       navigation.goBack();
       return;
     }
-    logout();
+    navigation.navigate('Home');
   };
 
   const onStartTraining = () => {
@@ -79,7 +79,7 @@ export const GoalSetupScreen = (): React.JSX.Element => {
       nextSessionExerciseId = currentActiveSession.items[0].id;
     } else {
       if (!activeSessionId) {
-        createSession();
+        createSession(goalType);
       }
       nextSessionExerciseId = addExerciseToActiveSession(
         preset.exerciseName,
@@ -90,7 +90,7 @@ export const GoalSetupScreen = (): React.JSX.Element => {
       if (!nextSessionExerciseId) {
         const retryActiveSessionId = useSessionStore.getState().activeSessionId;
         if (!retryActiveSessionId) {
-          createSession();
+          createSession(goalType);
         }
         nextSessionExerciseId = useSessionStore
           .getState()
@@ -98,10 +98,10 @@ export const GoalSetupScreen = (): React.JSX.Element => {
       }
     }
 
-    if (nextSessionExerciseId) {
-      requestStartSession();
-    }
     completeGoalSetup({goalType});
+    if (nextSessionExerciseId) {
+      navigation.navigate('Session', {sessionExerciseId: nextSessionExerciseId});
+    }
   };
 
   return (

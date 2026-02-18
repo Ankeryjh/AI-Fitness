@@ -1,17 +1,23 @@
 import React, {useMemo} from 'react';
 import {Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View} from 'react-native';
-import {NativeStackScreenProps} from '@react-navigation/native-stack';
+import {useNavigation} from '@react-navigation/native';
+import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 
 import {RootStackParamList} from '../navigation/RootNavigator';
+import {getSessionTitle, getFocusLabel} from '../services/sessionMeta';
 import {formatDuration} from '../services/format';
 import {GoalType, useOnboardingStore} from '../store/onboardingStore';
 import {getWorkoutSummary, useSessionStore} from '../store/sessionStore';
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
-
 interface GoalPreset {
   exerciseName: string;
   restSec: number;
+}
+
+interface HeatmapCell {
+  date: Date;
+  inYear: boolean;
+  trained: boolean;
 }
 
 const goalPresets: Record<GoalType, GoalPreset> = {
@@ -23,13 +29,20 @@ const goalPresets: Record<GoalType, GoalPreset> = {
   core: {exerciseName: '卷腹', restSec: 60},
 };
 
-export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
+const pad = (value: number): string => String(value).padStart(2, '0');
+const toDateKey = (value: Date): string =>
+  `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+
+export const HomeScreen = (): React.JSX.Element => {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+
   const goalType = useOnboardingStore(state => state.goalSetup.goalType);
   const userName = useOnboardingStore(state => state.email || 'athlete@fitrest.io');
   const logout = useOnboardingStore(state => state.logout);
 
   const activeSessionId = useSessionStore(state => state.activeSessionId);
   const sessions = useSessionStore(state => state.sessions);
+  const exercises = useSessionStore(state => state.exercises);
   const createSession = useSessionStore(state => state.createSession);
   const addExerciseToActiveSession = useSessionStore(state => state.addExerciseToActiveSession);
 
@@ -46,17 +59,64 @@ export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
     [sortedSessions],
   );
 
-  const last7SessionVolumes = useMemo(
-    () =>
-      sortedSessions.slice(0, 7).map(session =>
-        session.items
-          .flatMap(item => item.sets)
-          .reduce((sum, setRecord) => sum + (setRecord.weight ?? 0) * (setRecord.reps ?? 0), 0),
-      ),
-    [sortedSessions],
-  );
+  const checkinData = useMemo(() => {
+    const displayYear = new Date().getFullYear();
+    const firstDay = new Date(displayYear, 0, 1);
+    const lastDay = new Date(displayYear, 11, 31);
 
-  const maxVolume = Math.max(...last7SessionVolumes, 1);
+    const trainedDateSet = new Set(
+      sortedSessions
+        .map(session => new Date(session.startAt))
+        .filter(date => date.getFullYear() === displayYear)
+        .map(date => toDateKey(date)),
+    );
+
+    const gridStart = new Date(firstDay);
+    gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+
+    const gridEnd = new Date(lastDay);
+    gridEnd.setDate(gridEnd.getDate() + (6 - gridEnd.getDay()));
+
+    const totalDays = Math.round((gridEnd.getTime() - gridStart.getTime()) / (24 * 3600 * 1000)) + 1;
+    const weekCount = Math.ceil(totalDays / 7);
+
+    const weeks: HeatmapCell[][] = [];
+    const monthLabels: string[] = [];
+
+    for (let weekIndex = 0; weekIndex < weekCount; weekIndex += 1) {
+      const weekCells: HeatmapCell[] = [];
+
+      const weekFirst = new Date(gridStart);
+      weekFirst.setDate(gridStart.getDate() + weekIndex * 7);
+
+      const labelDate = new Date(weekFirst);
+      labelDate.setDate(weekFirst.getDate() + (1 - weekFirst.getDay() + 7) % 7);
+      const showLabel =
+        labelDate.getFullYear() === displayYear && labelDate.getDate() <= 7 && weekIndex < weekCount - 1;
+      monthLabels.push(showLabel ? `${labelDate.getMonth() + 1}月` : '');
+
+      for (let dayIndex = 0; dayIndex < 7; dayIndex += 1) {
+        const date = new Date(gridStart);
+        date.setDate(gridStart.getDate() + weekIndex * 7 + dayIndex);
+
+        const inYear = date >= firstDay && date <= lastDay;
+        weekCells.push({
+          date,
+          inYear,
+          trained: inYear ? trainedDateSet.has(toDateKey(date)) : false,
+        });
+      }
+
+      weeks.push(weekCells);
+    }
+
+    return {
+      year: displayYear,
+      checkedDays: trainedDateSet.size,
+      weeks,
+      monthLabels,
+    };
+  }, [sortedSessions]);
 
   const onStartTraining = () => {
     const preset = goalPresets[goalType];
@@ -68,7 +128,7 @@ export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
       nextSessionExerciseId = currentActiveSession.items[0].id;
     } else {
       if (!activeSessionId) {
-        createSession();
+        createSession(goalType);
       }
       nextSessionExerciseId = addExerciseToActiveSession(
         preset.exerciseName,
@@ -79,7 +139,7 @@ export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
       if (!nextSessionExerciseId) {
         const retryActiveSessionId = useSessionStore.getState().activeSessionId;
         if (!retryActiveSessionId) {
-          createSession();
+          createSession(goalType);
         }
         nextSessionExerciseId = useSessionStore
           .getState()
@@ -106,9 +166,7 @@ export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
         <View style={styles.profileCard}>
           <Text style={styles.profileLabel}>账号</Text>
           <Text style={styles.profileValue}>{userName}</Text>
-          <Text style={styles.profileMeta}>{`累计容量 ${Math.round(totalVolume)} KG · 目标 ${
-            goalType.toUpperCase()
-          }`}</Text>
+          <Text style={styles.profileMeta}>{`累计容量 ${Math.round(totalVolume)} KG · 目标 ${getFocusLabel(goalType)}`}</Text>
         </View>
 
         <Pressable style={styles.mainCta} onPress={onStartTraining}>
@@ -116,21 +174,37 @@ export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
         </Pressable>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>力量增长趋势（最近 7 次）</Text>
-          <View style={styles.chartRow}>
-            {last7SessionVolumes.length === 0 ? (
-              <Text style={styles.empty}>暂无训练数据</Text>
-            ) : (
-              last7SessionVolumes.map((value, index) => (
-                <View key={`${value}_${index}`} style={styles.barWrap}>
-                  <View style={styles.barTrack}>
-                    <View style={[styles.barFill, {height: `${Math.max(8, (value / maxVolume) * 100)}%`}]} />
+          <Text style={styles.sectionTitle}>{`训练打卡（${checkinData.year}）`}</Text>
+          <Text style={styles.checkinSub}>{`${checkinData.year} 年已打卡 ${checkinData.checkedDays} 天`}</Text>
+
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.heatmapScrollContent}>
+            <View>
+              <View style={styles.monthRow}>
+                {checkinData.monthLabels.map((label, index) => (
+                  <View key={`${label}_${index}`} style={styles.monthCell}>
+                    <Text style={styles.monthText}>{label}</Text>
                   </View>
-                  <Text style={styles.barLabel}>{`${index + 1}`}</Text>
-                </View>
-              ))
-            )}
-          </View>
+                ))}
+              </View>
+
+              <View style={styles.heatmapGrid}>
+                {checkinData.weeks.map((week, weekIndex) => (
+                  <View key={`week_${weekIndex}`} style={styles.weekColumn}>
+                    {week.map(day => (
+                      <View
+                        key={`${toDateKey(day.date)}_${day.date.getDay()}`}
+                        style={[
+                          styles.heatCell,
+                          day.inYear ? styles.heatCellInYear : styles.heatCellOutYear,
+                          day.trained ? styles.heatCellTrained : null,
+                        ]}
+                      />
+                    ))}
+                  </View>
+                ))}
+              </View>
+            </View>
+          </ScrollView>
         </View>
 
         <View style={styles.card}>
@@ -142,14 +216,20 @@ export const HomeScreen = ({navigation}: Props): React.JSX.Element => {
           </View>
           {sortedSessions.slice(0, 4).map(session => {
             const summary = getWorkoutSummary(session);
+            const sessionVolume = session.items
+              .flatMap(item => item.sets)
+              .reduce((sum, setRecord) => sum + (setRecord.weight ?? 0) * (setRecord.reps ?? 0), 0);
+            const sessionTitle = getSessionTitle(session, exercises);
+            const dateText = new Date(session.startAt).toLocaleDateString('zh-CN');
+
             return (
               <Pressable
                 key={session.id}
                 style={styles.historyRow}
                 onPress={() => navigation.navigate('HistoryDetail', {sessionId: session.id})}>
-                <View>
-                  <Text style={styles.historyTitle}>{new Date(session.startAt).toLocaleDateString()}</Text>
-                  <Text style={styles.historyMeta}>{`${summary.totalSets} 组 · 休息均值 ${summary.averageRestSec}s`}</Text>
+                <View style={styles.historyLeft}>
+                  <Text style={styles.historyTitle}>{`${sessionTitle} · ${dateText}`}</Text>
+                  <Text style={styles.historyMeta}>{`容量 ${Math.round(sessionVolume)}kg · ${summary.totalSets}组`}</Text>
                 </View>
                 <Text style={styles.historyDuration}>{formatDuration(summary.totalDurationSec)}</Text>
               </Pressable>
@@ -253,6 +333,54 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '700',
   },
+  checkinSub: {
+    marginTop: 6,
+    color: '#8A94A5',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  heatmapScrollContent: {
+    marginTop: 12,
+    paddingRight: 8,
+  },
+  monthRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  monthCell: {
+    width: 13,
+    marginRight: 3,
+    alignItems: 'center',
+  },
+  monthText: {
+    color: '#9AA3B1',
+    fontSize: 9,
+    fontWeight: '600',
+  },
+  heatmapGrid: {
+    flexDirection: 'row',
+  },
+  weekColumn: {
+    gap: 3,
+    marginRight: 3,
+  },
+  heatCell: {
+    width: 10,
+    height: 10,
+    borderRadius: 2,
+  },
+  heatCellInYear: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#DFE4EC',
+  },
+  heatCellOutYear: {
+    opacity: 0,
+  },
+  heatCellTrained: {
+    backgroundColor: '#21A453',
+    borderColor: '#21A453',
+  },
   rowHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -264,37 +392,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  chartRow: {
-    marginTop: 14,
-    minHeight: 120,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 10,
-  },
-  barWrap: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 6,
-  },
-  barTrack: {
-    width: '100%',
-    minHeight: 72,
-    maxHeight: 100,
-    backgroundColor: '#ECEFF4',
-    borderRadius: 8,
-    justifyContent: 'flex-end',
-    overflow: 'hidden',
-  },
-  barFill: {
-    width: '100%',
-    backgroundColor: '#0A0A0A',
-    borderRadius: 8,
-  },
-  barLabel: {
-    color: '#9AA3B1',
-    fontSize: 11,
-    fontWeight: '600',
-  },
   historyRow: {
     paddingVertical: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -303,6 +400,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+  },
+  historyLeft: {
+    flex: 1,
   },
   historyTitle: {
     color: '#0F1727',

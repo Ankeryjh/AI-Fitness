@@ -1,6 +1,8 @@
 import React from 'react';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
+import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 
+import {AppTabIcon} from '../components/AppTabIcon';
 import {AIReportScreen} from '../screens/AIReportScreen';
 import {GoalSetupScreen} from '../screens/GoalSetupScreen';
 import {HistoryDetailScreen} from '../screens/HistoryDetailScreen';
@@ -12,7 +14,6 @@ import {RestTimerScreen} from '../screens/RestTimerScreen';
 import {SessionScreen} from '../screens/SessionScreen';
 import {WorkoutSummaryScreen} from '../screens/WorkoutSummaryScreen';
 import {useOnboardingStore} from '../store/onboardingStore';
-import {useSessionStore} from '../store/sessionStore';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -27,40 +28,55 @@ export type RootStackParamList = {
   AIReport: {sessionId?: string} | undefined;
 };
 
+type AppTabParamList = {
+  TrainingTab: undefined;
+  ProfileTab: undefined;
+};
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
+const Tab = createBottomTabNavigator<AppTabParamList>();
+
+const AppTabs = (): React.JSX.Element => (
+  <Tab.Navigator
+    screenOptions={{
+      headerShown: false,
+      tabBarStyle: {
+        height: 62,
+        paddingTop: 8,
+        paddingBottom: 8,
+        borderTopColor: '#E4E7EE',
+        backgroundColor: '#FFFFFF',
+      },
+      tabBarLabelStyle: {
+        fontSize: 13,
+        fontWeight: '700',
+      },
+      tabBarActiveTintColor: '#111111',
+      tabBarInactiveTintColor: '#8B95A4',
+    }}>
+    <Tab.Screen
+      name="TrainingTab"
+      component={GoalSetupScreen}
+      options={{
+        tabBarLabel: '训练',
+        tabBarIcon: ({color, size}) => <AppTabIcon name="training" color={color} size={size} />,
+      }}
+    />
+    <Tab.Screen
+      name="ProfileTab"
+      component={HomeScreen}
+      options={{
+        tabBarLabel: '个人',
+        tabBarIcon: ({color, size}) => <AppTabIcon name="profile" color={color} size={size} />,
+      }}
+    />
+  </Tab.Navigator>
+);
 
 export const RootNavigator = (): React.JSX.Element => {
   const isLoggedIn = useOnboardingStore(state => state.isLoggedIn);
-  const hasCompletedGoalSetup = useOnboardingStore(state => state.hasCompletedGoalSetup);
-  const startSessionAfterGoalSetup = useOnboardingStore(state => state.startSessionAfterGoalSetup);
-  const clearStartSessionRequest = useOnboardingStore(state => state.clearStartSessionRequest);
-
-  const activeSessionId = useSessionStore(state => state.activeSessionId);
-  const sessions = useSessionStore(state => state.sessions);
-
-  const activeSession = activeSessionId
-    ? sessions.find(session => session.id === activeSessionId)
-    : undefined;
-  const initialSessionExerciseId = activeSession?.items[0]?.id;
-  const initialSessionParams =
-    startSessionAfterGoalSetup && initialSessionExerciseId
-      ? {sessionExerciseId: initialSessionExerciseId}
-      : undefined;
-
-  const routeKey = !isLoggedIn ? 'auth' : hasCompletedGoalSetup ? 'app' : 'goal-setup';
-  const initialRouteName = !isLoggedIn
-    ? 'Login'
-    : hasCompletedGoalSetup
-      ? startSessionAfterGoalSetup
-        ? 'Session'
-        : 'Home'
-      : 'GoalSetup';
-
-  React.useEffect(() => {
-    if (hasCompletedGoalSetup && startSessionAfterGoalSetup) {
-      clearStartSessionRequest();
-    }
-  }, [clearStartSessionRequest, hasCompletedGoalSetup, startSessionAfterGoalSetup]);
+  const routeKey = !isLoggedIn ? 'auth' : 'app';
+  const initialRouteName = !isLoggedIn ? 'Login' : 'Home';
 
   return (
     <Stack.Navigator
@@ -72,16 +88,10 @@ export const RootNavigator = (): React.JSX.Element => {
       }}>
       {!isLoggedIn ? (
         <Stack.Screen name="Login" component={LoginScreen} />
-      ) : !hasCompletedGoalSetup ? (
-        <Stack.Screen name="GoalSetup" component={GoalSetupScreen} />
       ) : (
         <>
-          <Stack.Screen name="Home" component={HomeScreen} />
-          <Stack.Screen
-            name="Session"
-            component={SessionScreen}
-            initialParams={initialSessionParams}
-          />
+          <Stack.Screen name="Home" component={AppTabs} />
+          <Stack.Screen name="Session" component={SessionScreen} />
           <Stack.Screen name="RestTimer" component={RestTimerScreen} />
           <Stack.Screen name="RestFocus" component={RestFocusScreen} />
           <Stack.Screen name="RestStats" component={RestStatsScreen} />

@@ -42,7 +42,7 @@ interface SessionState {
   exercises: Exercise[];
   sessions: Session[];
   activeSessionId: string | null;
-  createSession: () => string;
+  createSession: (focusArea?: string) => string;
   endActiveSession: () => void;
   addExerciseToActiveSession: (
     exerciseName: string,
@@ -91,11 +91,12 @@ export const useSessionStore = create<SessionState>()(
       exercises: defaultExercises,
       sessions: [],
       activeSessionId: null,
-      createSession: () => {
+      createSession: focusArea => {
         const id = createId('session');
         const session: Session = {
           id,
           startAt: new Date().toISOString(),
+          focusArea: focusArea?.trim() || undefined,
           items: [],
         };
 

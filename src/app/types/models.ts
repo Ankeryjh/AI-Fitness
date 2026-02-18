@@ -32,6 +32,7 @@ export interface Session {
   id: string;
   startAt: string;
   endAt?: string;
+  focusArea?: string;
   items: SessionExercise[];
 }
 
