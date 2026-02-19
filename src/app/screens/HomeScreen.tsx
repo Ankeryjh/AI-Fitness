@@ -8,6 +8,7 @@ import {getSessionTitle, getFocusLabel} from '../services/sessionMeta';
 import {formatDuration} from '../services/format';
 import {GoalType, useOnboardingStore} from '../store/onboardingStore';
 import {getWorkoutSummary, useSessionStore} from '../store/sessionStore';
+import {useSettingsStore} from '../store/settingsStore';
 
 interface GoalPreset {
   exerciseName: string;
@@ -45,6 +46,8 @@ export const HomeScreen = (): React.JSX.Element => {
   const exercises = useSessionStore(state => state.exercises);
   const createSession = useSessionStore(state => state.createSession);
   const addExerciseToActiveSession = useSessionStore(state => state.addExerciseToActiveSession);
+  const clearAllSessions = useSessionStore(state => state.clearAll);
+  const resetSettings = useSettingsStore(state => state.resetToDefault);
 
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => +new Date(b.startAt) - +new Date(a.startAt)),
@@ -118,36 +121,49 @@ export const HomeScreen = (): React.JSX.Element => {
     };
   }, [sortedSessions]);
 
-  const onStartTraining = () => {
+  const onStartTraining = async () => {
     const preset = goalPresets[goalType];
 
     let nextSessionExerciseId: string | null = null;
 
-    const currentActiveSession = sessions.find(session => session.id === activeSessionId);
-    if (currentActiveSession?.items[0]) {
-      nextSessionExerciseId = currentActiveSession.items[0].id;
-    } else {
-      if (!activeSessionId) {
-        createSession(goalType);
-      }
-      nextSessionExerciseId = addExerciseToActiveSession(
-        preset.exerciseName,
-        preset.restSec,
-        preset.restSec,
-        4,
-      );
-      if (!nextSessionExerciseId) {
-        const retryActiveSessionId = useSessionStore.getState().activeSessionId;
-        if (!retryActiveSessionId) {
-          createSession(goalType);
+    try {
+      const currentActiveSession = sessions.find(session => session.id === activeSessionId);
+      if (currentActiveSession?.items[0]) {
+        nextSessionExerciseId = currentActiveSession.items[0].id;
+      } else {
+        if (!activeSessionId) {
+          await createSession(goalType);
         }
-        nextSessionExerciseId = useSessionStore
-          .getState()
-          .addExerciseToActiveSession(preset.exerciseName, preset.restSec, preset.restSec, 4);
+
+        nextSessionExerciseId = await addExerciseToActiveSession(
+          preset.exerciseName,
+          preset.restSec,
+          preset.restSec,
+          4,
+        );
+
+        if (!nextSessionExerciseId) {
+          const retryActiveSessionId = useSessionStore.getState().activeSessionId;
+          if (!retryActiveSessionId) {
+            await createSession(goalType);
+          }
+          nextSessionExerciseId = await useSessionStore
+            .getState()
+            .addExerciseToActiveSession(preset.exerciseName, preset.restSec, preset.restSec, 4);
+        }
       }
+    } catch (error) {
+      console.warn('[home] failed to start training', error);
+      return;
     }
 
     navigation.navigate('Session', {sessionExerciseId: nextSessionExerciseId ?? undefined});
+  };
+
+  const onLogoutPress = () => {
+    clearAllSessions();
+    resetSettings();
+    logout();
   };
 
   return (
@@ -158,7 +174,7 @@ export const HomeScreen = (): React.JSX.Element => {
             <Text style={styles.overline}>PERSONAL CENTER</Text>
             <Text style={styles.title}>训练档案</Text>
           </View>
-          <Pressable onPress={logout}>
+          <Pressable onPress={onLogoutPress}>
             <Text style={styles.logout}>退出</Text>
           </Pressable>
         </View>
@@ -169,7 +185,7 @@ export const HomeScreen = (): React.JSX.Element => {
           <Text style={styles.profileMeta}>{`累计容量 ${Math.round(totalVolume)} KG · 目标 ${getFocusLabel(goalType)}`}</Text>
         </View>
 
-        <Pressable style={styles.mainCta} onPress={onStartTraining}>
+        <Pressable style={styles.mainCta} onPress={() => void onStartTraining()}>
           <Text style={styles.mainCtaText}>开始今日训练  →</Text>
         </Pressable>
 

@@ -1,9 +1,22 @@
 import {create} from 'zustand';
 import {createJSONStorage, persist} from 'zustand/middleware';
 
-import {createId} from '../services/id';
+import {
+  BackendSession,
+  BackendSessionExercise,
+  BackendSetRecord,
+  addExerciseToSession,
+  createSessionExerciseSet,
+  createWorkoutSession,
+  endWorkoutSession,
+  listWorkoutSessions,
+  patchSessionExercise,
+  patchSetRecord,
+  startNextSetForSessionExercise,
+} from '../services/sessionApi';
 import {mmkvJSONStorage} from '../services/storage';
 import {Exercise, Session, SessionExercise, SetRecord, WorkoutSummary} from '../types/models';
+import {useOnboardingStore} from './onboardingStore';
 
 interface CompleteSetInput {
   sessionExerciseId: string;
@@ -42,41 +55,30 @@ interface SessionState {
   exercises: Exercise[];
   sessions: Session[];
   activeSessionId: string | null;
-  createSession: (focusArea?: string) => string;
-  endActiveSession: () => void;
+  isSyncing: boolean;
+  syncSessionsFromServer: (limit?: number) => Promise<void>;
+  createSession: (focusArea?: string) => Promise<string>;
+  endActiveSession: () => Promise<void>;
   addExerciseToActiveSession: (
     exerciseName: string,
     defaultRestSec: number,
     restSecOverride?: number,
     targetSets?: number,
-  ) => string | null;
-  completeSet: (input: CompleteSetInput) => SetRecord | null;
-  startNextSet: (input: StartNextSetInput) => SetRecord | null;
-  updateSetRecord: (input: UpdateSetRecordInput) => SetRecord | null;
-  updateSessionExerciseName: (input: UpdateSessionExerciseNameInput) => void;
-  updateSessionExerciseTargetSets: (input: UpdateSessionExerciseTargetSetsInput) => void;
+  ) => Promise<string | null>;
+  completeSet: (input: CompleteSetInput) => Promise<SetRecord | null>;
+  startNextSet: (input: StartNextSetInput) => Promise<SetRecord | null>;
+  updateSetRecord: (input: UpdateSetRecordInput) => Promise<SetRecord | null>;
+  updateSessionExerciseName: (input: UpdateSessionExerciseNameInput) => Promise<void>;
+  updateSessionExerciseTargetSets: (input: UpdateSessionExerciseTargetSetsInput) => Promise<void>;
+  clearAll: () => void;
 }
 
 const defaultExercises: Exercise[] = [
-  {id: createId('exercise'), name: 'Bench Press', defaultRestSec: 90},
-  {id: createId('exercise'), name: 'Lat Pulldown', defaultRestSec: 90},
-  {id: createId('exercise'), name: 'Squat', defaultRestSec: 120},
-  {id: createId('exercise'), name: 'Deadlift', defaultRestSec: 150},
+  {id: 'preset_bench_press', name: 'Bench Press', defaultRestSec: 90},
+  {id: 'preset_lat_pulldown', name: 'Lat Pulldown', defaultRestSec: 90},
+  {id: 'preset_squat', name: 'Squat', defaultRestSec: 120},
+  {id: 'preset_deadlift', name: 'Deadlift', defaultRestSec: 150},
 ];
-
-const findSessionExercise = (
-  sessions: Session[],
-  sessionExerciseId: string,
-): {sessionIndex: number; itemIndex: number} | null => {
-  for (let sIndex = 0; sIndex < sessions.length; sIndex += 1) {
-    const itemIndex = sessions[sIndex].items.findIndex(item => item.id === sessionExerciseId);
-    if (itemIndex >= 0) {
-      return {sessionIndex: sIndex, itemIndex};
-    }
-  }
-
-  return null;
-};
 
 const normalizeTargetSets = (value?: number): number => {
   if (!Number.isFinite(value)) {
@@ -85,282 +87,342 @@ const normalizeTargetSets = (value?: number): number => {
   return Math.max(1, Math.min(30, Math.round(value as number)));
 };
 
+const toOptional = <T>(value: T | null | undefined): T | undefined =>
+  value === null || value === undefined ? undefined : value;
+
+const getAuthTokenOrThrow = (): string => {
+  const token = useOnboardingStore.getState().authToken;
+  if (!token) {
+    throw new Error('Missing auth token. Please login again.');
+  }
+  return token;
+};
+
+const mapBackendSetRecord = (record: BackendSetRecord): SetRecord => ({
+  id: record.id,
+  index: record.index,
+  weight: toOptional(record.weight),
+  reps: toOptional(record.reps),
+  rpe: toOptional(record.rpe),
+  note: toOptional(record.note),
+  setEndAt: toOptional(record.setEndAt),
+  nextSetStartAt: toOptional(record.nextSetStartAt),
+  restActualSec: toOptional(record.restActualSec),
+});
+
+const mapBackendSessionExercise = (
+  item: BackendSessionExercise,
+): {item: SessionExercise; exercise: Exercise} => ({
+  item: {
+    id: item.id,
+    sessionId: item.sessionId,
+    exerciseId: item.exerciseId,
+    customName: toOptional(item.customName),
+    targetSets: toOptional(item.targetSets),
+    restSecOverride: toOptional(item.restSecOverride),
+    sets: item.sets.map(mapBackendSetRecord),
+  },
+  exercise: {
+    id: item.exerciseId,
+    name: item.exerciseName,
+    defaultRestSec: item.defaultRestSec,
+  },
+});
+
+const mapBackendSession = (
+  backendSession: BackendSession,
+): {session: Session; exercises: Exercise[]} => {
+  const mappedItems = backendSession.items.map(mapBackendSessionExercise);
+
+  return {
+    session: {
+      id: backendSession.id,
+      startAt: backendSession.startAt,
+      endAt: toOptional(backendSession.endAt),
+      focusArea: toOptional(backendSession.focusArea),
+      items: mappedItems.map(entry => entry.item),
+    },
+    exercises: mappedItems.map(entry => entry.exercise),
+  };
+};
+
+const mergeExercises = (base: Exercise[], incoming: Exercise[]): Exercise[] => {
+  const map = new Map<string, Exercise>();
+
+  for (const exercise of base) {
+    map.set(exercise.id, exercise);
+  }
+  for (const exercise of incoming) {
+    map.set(exercise.id, exercise);
+  }
+
+  return Array.from(map.values());
+};
+
+const applySetRecordPatch = (
+  sessions: Session[],
+  sessionExerciseId: string,
+  setRecord: SetRecord,
+): Session[] =>
+  sessions.map(session => ({
+    ...session,
+    items: session.items.map(item => {
+      if (item.id !== sessionExerciseId) {
+        return item;
+      }
+
+      const existingSetIndex = item.sets.findIndex(entry => entry.id === setRecord.id);
+      const nextSets = [...item.sets];
+
+      if (existingSetIndex >= 0) {
+        nextSets[existingSetIndex] = setRecord;
+      } else {
+        nextSets.push(setRecord);
+      }
+
+      nextSets.sort((a, b) => a.index - b.index);
+      return {
+        ...item,
+        sets: nextSets,
+      };
+    }),
+  }));
+
+const applySessionExercisePatch = (
+  sessions: Session[],
+  sessionExerciseId: string,
+  patch: Partial<SessionExercise>,
+): Session[] =>
+  sessions.map(session => ({
+    ...session,
+    items: session.items.map(item =>
+      item.id === sessionExerciseId
+        ? {
+            ...item,
+            ...patch,
+          }
+        : item,
+    ),
+  }));
+
 export const useSessionStore = create<SessionState>()(
   persist(
     (set, get) => ({
       exercises: defaultExercises,
       sessions: [],
       activeSessionId: null,
-      createSession: focusArea => {
-        const id = createId('session');
-        const session: Session = {
-          id,
-          startAt: new Date().toISOString(),
+      isSyncing: false,
+      syncSessionsFromServer: async (limit = 50) => {
+        const token = getAuthTokenOrThrow();
+
+        set({isSyncing: true});
+        try {
+          const result = await listWorkoutSessions(token, {limit});
+          const mapped = result.list.map(mapBackendSession);
+          const sessions = mapped.map(entry => entry.session);
+          const exerciseList = mapped.flatMap(entry => entry.exercises);
+          const nextExercises =
+            exerciseList.length > 0
+              ? mergeExercises(defaultExercises, exerciseList)
+              : get().exercises.length > 0
+                ? get().exercises
+                : defaultExercises;
+
+          const previousActive = get().activeSessionId;
+          const nextActive =
+            previousActive && sessions.some(session => session.id === previousActive && !session.endAt)
+              ? previousActive
+              : sessions.find(session => !session.endAt)?.id ?? null;
+
+          set({
+            sessions,
+            exercises: nextExercises,
+            activeSessionId: nextActive,
+          });
+        } finally {
+          set({isSyncing: false});
+        }
+      },
+      createSession: async focusArea => {
+        const token = getAuthTokenOrThrow();
+        const created = await createWorkoutSession(token, {
           focusArea: focusArea?.trim() || undefined,
-          items: [],
-        };
+        });
+
+        const mapped = mapBackendSession(created);
 
         set(state => ({
-          sessions: [session, ...state.sessions],
-          activeSessionId: id,
+          sessions: [mapped.session, ...state.sessions.filter(session => session.id !== mapped.session.id)],
+          exercises: mergeExercises(state.exercises, mapped.exercises),
+          activeSessionId: mapped.session.id,
         }));
 
-        return id;
+        return mapped.session.id;
       },
-      endActiveSession: () => {
+      endActiveSession: async () => {
         const activeSessionId = get().activeSessionId;
         if (!activeSessionId) {
           return;
         }
 
-        const endAt = new Date().toISOString();
+        const token = getAuthTokenOrThrow();
+        const ended = await endWorkoutSession(token, activeSessionId);
 
         set(state => ({
           activeSessionId: null,
           sessions: state.sessions.map(session =>
-            session.id === activeSessionId ? {...session, endAt} : session,
+            session.id === ended.id
+              ? {
+                  ...session,
+                  endAt: toOptional(ended.endAt),
+                }
+              : session,
           ),
         }));
       },
-      addExerciseToActiveSession: (exerciseName, defaultRestSec, restSecOverride, targetSets) => {
+      addExerciseToActiveSession: async (exerciseName, defaultRestSec, restSecOverride, targetSets) => {
         const activeSessionId = get().activeSessionId;
         if (!activeSessionId) {
           return null;
         }
 
-        const normalized = exerciseName.trim();
-        if (!normalized) {
+        const normalizedName = exerciseName.trim();
+        if (!normalizedName) {
           return null;
         }
 
-        const existingExercise = get().exercises.find(
-          ex => ex.name.toLowerCase() === normalized.toLowerCase(),
-        );
-
-        const exerciseId = existingExercise?.id ?? createId('exercise');
-        const shouldInsertExercise = !existingExercise;
-
-        const sessionExerciseId = createId('session_exercise');
-        const newSessionExercise: SessionExercise = {
-          id: sessionExerciseId,
-          sessionId: activeSessionId,
-          exerciseId,
+        const token = getAuthTokenOrThrow();
+        const created = await addExerciseToSession(token, activeSessionId, {
+          exerciseName: normalizedName,
+          defaultRestSec,
+          restSecOverride: restSecOverride ?? null,
           targetSets: normalizeTargetSets(targetSets),
-          restSecOverride,
-          sets: [],
-        };
+        });
+
+        const mapped = mapBackendSessionExercise(created);
 
         set(state => ({
-          exercises: shouldInsertExercise
-            ? [
-                ...state.exercises,
-                {
-                  id: exerciseId,
-                  name: normalized,
-                  defaultRestSec,
-                },
-              ]
-            : state.exercises,
-          sessions: state.sessions.map(session =>
-            session.id === activeSessionId
-              ? {...session, items: [...session.items, newSessionExercise]}
-              : session,
-          ),
+          exercises: mergeExercises(state.exercises, [mapped.exercise]),
+          sessions: state.sessions.map(session => {
+            if (session.id !== activeSessionId) {
+              return session;
+            }
+
+            const exists = session.items.some(item => item.id === mapped.item.id);
+            return {
+              ...session,
+              items: exists
+                ? session.items.map(item => (item.id === mapped.item.id ? mapped.item : item))
+                : [...session.items, mapped.item],
+            };
+          }),
         }));
 
-        return sessionExerciseId;
+        return mapped.item.id;
       },
-      completeSet: ({sessionExerciseId, weight, reps, rpe, note, endedAtMs}) => {
-        const locate = findSessionExercise(get().sessions, sessionExerciseId);
-        if (!locate) {
+      completeSet: async ({sessionExerciseId, weight, reps, rpe, note, endedAtMs}) => {
+        const token = getAuthTokenOrThrow();
+        const created = await createSessionExerciseSet(token, sessionExerciseId, {
+          weight: weight ?? null,
+          reps: reps ?? null,
+          rpe: rpe ?? null,
+          note: note ?? null,
+          endedAt: new Date(endedAtMs ?? Date.now()).toISOString(),
+        });
+
+        const mappedSet = mapBackendSetRecord(created);
+
+        set(state => ({
+          sessions: applySetRecordPatch(state.sessions, sessionExerciseId, mappedSet),
+        }));
+
+        return mappedSet;
+      },
+      startNextSet: async ({sessionExerciseId, startedAtMs}) => {
+        const token = getAuthTokenOrThrow();
+        const updated = await startNextSetForSessionExercise(token, sessionExerciseId, {
+          startedAt: new Date(startedAtMs ?? Date.now()).toISOString(),
+        });
+
+        const mappedSet = mapBackendSetRecord(updated);
+
+        set(state => ({
+          sessions: applySetRecordPatch(state.sessions, sessionExerciseId, mappedSet),
+        }));
+
+        return mappedSet;
+      },
+      updateSetRecord: async ({sessionExerciseId, setId, weight, reps, rpe, note}) => {
+        const payload: {
+          weight?: number | null;
+          reps?: number | null;
+          rpe?: number | null;
+          note?: string | null;
+        } = {};
+
+        if (weight !== undefined) {
+          payload.weight = weight;
+        }
+        if (reps !== undefined) {
+          payload.reps = reps;
+        }
+        if (rpe !== undefined) {
+          payload.rpe = rpe;
+        }
+        if (note !== undefined) {
+          payload.note = note;
+        }
+
+        if (Object.keys(payload).length === 0) {
           return null;
         }
 
-        const endedAt = new Date(endedAtMs ?? Date.now()).toISOString();
-        let createdSet: SetRecord | null = null;
+        const token = getAuthTokenOrThrow();
+        const updated = await patchSetRecord(token, setId, payload);
+        const mappedSet = mapBackendSetRecord(updated);
 
-        set(state => {
-          const nextSessions = [...state.sessions];
-          const session = nextSessions[locate.sessionIndex];
-          const item = session.items[locate.itemIndex];
-          const setRecord: SetRecord = {
-            id: createId('set'),
-            index: item.sets.length + 1,
-            weight,
-            reps,
-            rpe,
-            note,
-            setEndAt: endedAt,
-          };
-          createdSet = setRecord;
+        set(state => ({
+          sessions: applySetRecordPatch(state.sessions, sessionExerciseId, mappedSet),
+        }));
 
-          const nextItem: SessionExercise = {
-            ...item,
-            sets: [...item.sets, setRecord],
-          };
-
-          const nextItems = [...session.items];
-          nextItems[locate.itemIndex] = nextItem;
-          nextSessions[locate.sessionIndex] = {...session, items: nextItems};
-
-          return {sessions: nextSessions};
-        });
-
-        return createdSet;
+        return mappedSet;
       },
-      startNextSet: ({sessionExerciseId, startedAtMs}) => {
-        const locate = findSessionExercise(get().sessions, sessionExerciseId);
-        if (!locate) {
-          return null;
-        }
-
-        const startedAt = new Date(startedAtMs ?? Date.now()).toISOString();
-        let updatedSet: SetRecord | null = null;
-
-        set(state => {
-          const nextSessions = [...state.sessions];
-          const session = nextSessions[locate.sessionIndex];
-          const item = session.items[locate.itemIndex];
-          const targetSetIndex = [...item.sets]
-            .reverse()
-            .findIndex(setRecord => setRecord.setEndAt && !setRecord.nextSetStartAt);
-
-          if (targetSetIndex < 0) {
-            return state;
-          }
-
-          const actualIndex = item.sets.length - 1 - targetSetIndex;
-          const existingSet = item.sets[actualIndex];
-          const endMs = existingSet.setEndAt ? new Date(existingSet.setEndAt).getTime() : 0;
-          const startMs = new Date(startedAt).getTime();
-
-          const patched: SetRecord = {
-            ...existingSet,
-            nextSetStartAt: startedAt,
-            restActualSec: Math.max(0, Math.round((startMs - endMs) / 1000)),
-          };
-          updatedSet = patched;
-
-          const nextSets = [...item.sets];
-          nextSets[actualIndex] = patched;
-
-          const nextItems = [...session.items];
-          nextItems[locate.itemIndex] = {
-            ...item,
-            sets: nextSets,
-          };
-
-          nextSessions[locate.sessionIndex] = {
-            ...session,
-            items: nextItems,
-          };
-
-          return {sessions: nextSessions};
-        });
-
-        return updatedSet;
-      },
-      updateSetRecord: ({sessionExerciseId, setId, weight, reps, rpe, note}) => {
-        const locate = findSessionExercise(get().sessions, sessionExerciseId);
-        if (!locate) {
-          return null;
-        }
-
-        let updatedSet: SetRecord | null = null;
-
-        set(state => {
-          const nextSessions = [...state.sessions];
-          const session = nextSessions[locate.sessionIndex];
-          const item = session.items[locate.itemIndex];
-          const setIndex = item.sets.findIndex(setRecord => setRecord.id === setId);
-
-          if (setIndex < 0) {
-            return state;
-          }
-
-          const target = item.sets[setIndex];
-          const patched: SetRecord = {
-            ...target,
-            weight,
-            reps,
-            rpe,
-            note,
-          };
-          updatedSet = patched;
-
-          const nextSets = [...item.sets];
-          nextSets[setIndex] = patched;
-
-          const nextItems = [...session.items];
-          nextItems[locate.itemIndex] = {
-            ...item,
-            sets: nextSets,
-          };
-
-          nextSessions[locate.sessionIndex] = {
-            ...session,
-            items: nextItems,
-          };
-
-          return {sessions: nextSessions};
-        });
-
-        return updatedSet;
-      },
-      updateSessionExerciseName: ({sessionExerciseId, customName}) => {
-        const locate = findSessionExercise(get().sessions, sessionExerciseId);
-        if (!locate) {
+      updateSessionExerciseName: async ({sessionExerciseId, customName}) => {
+        const normalizedName = customName.trim();
+        if (!normalizedName) {
           return;
         }
 
-        set(state => {
-          const nextSessions = [...state.sessions];
-          const session = nextSessions[locate.sessionIndex];
-          const item = session.items[locate.itemIndex];
-
-          const nextItem: SessionExercise = {
-            ...item,
-            customName,
-          };
-
-          const nextItems = [...session.items];
-          nextItems[locate.itemIndex] = nextItem;
-
-          nextSessions[locate.sessionIndex] = {
-            ...session,
-            items: nextItems,
-          };
-
-          return {sessions: nextSessions};
+        const token = getAuthTokenOrThrow();
+        const updated = await patchSessionExercise(token, sessionExerciseId, {
+          customName: normalizedName,
         });
+
+        set(state => ({
+          sessions: applySessionExercisePatch(state.sessions, sessionExerciseId, {
+            customName: toOptional(updated.customName),
+          }),
+        }));
       },
-      updateSessionExerciseTargetSets: ({sessionExerciseId, targetSets}) => {
-        const locate = findSessionExercise(get().sessions, sessionExerciseId);
-        if (!locate) {
-          return;
-        }
-
-        set(state => {
-          const nextSessions = [...state.sessions];
-          const session = nextSessions[locate.sessionIndex];
-          const item = session.items[locate.itemIndex];
-
-          const nextItem: SessionExercise = {
-            ...item,
-            targetSets: normalizeTargetSets(targetSets),
-          };
-
-          const nextItems = [...session.items];
-          nextItems[locate.itemIndex] = nextItem;
-
-          nextSessions[locate.sessionIndex] = {
-            ...session,
-            items: nextItems,
-          };
-
-          return {sessions: nextSessions};
+      updateSessionExerciseTargetSets: async ({sessionExerciseId, targetSets}) => {
+        const token = getAuthTokenOrThrow();
+        const normalizedTargetSets = normalizeTargetSets(targetSets);
+        const updated = await patchSessionExercise(token, sessionExerciseId, {
+          targetSets: normalizedTargetSets,
         });
+
+        set(state => ({
+          sessions: applySessionExercisePatch(state.sessions, sessionExerciseId, {
+            targetSets: toOptional(updated.targetSets),
+          }),
+        }));
       },
+      clearAll: () =>
+        set({
+          exercises: defaultExercises,
+          sessions: [],
+          activeSessionId: null,
+        }),
     }),
     {
       name: 'session-store',

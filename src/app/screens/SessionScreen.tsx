@@ -186,41 +186,49 @@ export const SessionScreen = ({navigation, route}: Props): React.JSX.Element => 
     }).start();
   };
 
-  const onCompleteCurrentSet = () => {
-    completeSet({
-      sessionExerciseId: sessionExercise.id,
-      weight,
-      reps,
-      endedAtMs: Date.now(),
-    });
-    navigation.navigate('RestTimer', {
-      sessionExerciseId: sessionExercise.id,
-      justCompletedSetIndex: currentSet,
-    });
+  const onCompleteCurrentSet = async () => {
+    try {
+      await completeSet({
+        sessionExerciseId: sessionExercise.id,
+        weight,
+        reps,
+        endedAtMs: Date.now(),
+      });
+      navigation.navigate('RestTimer', {
+        sessionExerciseId: sessionExercise.id,
+        justCompletedSetIndex: currentSet,
+      });
+    } catch (error) {
+      console.warn('[session] failed to complete set', error);
+    }
   };
 
   const closeActionModal = () => {
     setActionModalVisible(false);
   };
 
-  const onSaveCurrentExerciseConfig = () => {
+  const onSaveCurrentExerciseConfig = async () => {
     const fallbackName = exercise?.name ?? preset.exerciseName;
     const normalizedName = actionNameInput.trim();
     const parsedTargetSets = parseTargetSets(actionSetsInput) ?? preset.totalSets;
     const minAllowedSets = Math.max(completedSets, 1);
 
-    updateSessionExerciseName({
-      sessionExerciseId: sessionExercise.id,
-      customName: normalizedName || fallbackName,
-    });
-    updateSessionExerciseTargetSets({
-      sessionExerciseId: sessionExercise.id,
-      targetSets: Math.max(parsedTargetSets, minAllowedSets),
-    });
-    closeActionModal();
+    try {
+      await updateSessionExerciseName({
+        sessionExerciseId: sessionExercise.id,
+        customName: normalizedName || fallbackName,
+      });
+      await updateSessionExerciseTargetSets({
+        sessionExerciseId: sessionExercise.id,
+        targetSets: Math.max(parsedTargetSets, minAllowedSets),
+      });
+      closeActionModal();
+    } catch (error) {
+      console.warn('[session] failed to update exercise config', error);
+    }
   };
 
-  const onAddNextExercise = () => {
+  const onAddNextExercise = async () => {
     const nextName = actionNameInput.trim();
     const targetSetsInput = parseTargetSets(actionSetsInput);
     if (!nextName || !targetSetsInput) {
@@ -228,21 +236,31 @@ export const SessionScreen = ({navigation, route}: Props): React.JSX.Element => 
     }
 
     const nextRestSec = sessionExercise.restSecOverride ?? exercise?.defaultRestSec ?? 90;
-    const nextSessionExerciseId = addExerciseToActiveSession(
-      nextName,
-      nextRestSec,
-      nextRestSec,
-      targetSetsInput,
-    );
+    let nextSessionExerciseId: string | null = null;
+    try {
+      nextSessionExerciseId = await addExerciseToActiveSession(
+        nextName,
+        nextRestSec,
+        nextRestSec,
+        targetSetsInput,
+      );
+    } catch (error) {
+      console.warn('[session] failed to add next exercise', error);
+      return;
+    }
 
     if (!nextSessionExerciseId) {
       return;
     }
 
-    updateSessionExerciseName({
-      sessionExerciseId: nextSessionExerciseId,
-      customName: nextName,
-    });
+    try {
+      await updateSessionExerciseName({
+        sessionExerciseId: nextSessionExerciseId,
+        customName: nextName,
+      });
+    } catch (error) {
+      console.warn('[session] failed to update next exercise name', error);
+    }
 
     closeActionModal();
     navigation.setParams({sessionExerciseId: nextSessionExerciseId});
@@ -255,10 +273,14 @@ export const SessionScreen = ({navigation, route}: Props): React.JSX.Element => 
     setActionModalVisible(true);
   };
 
-  const onFinishWorkout = () => {
+  const onFinishWorkout = async () => {
     const sessionId = activeSession.id;
-    endActiveSession();
-    navigation.navigate('WorkoutSummary', {sessionId});
+    try {
+      await endActiveSession();
+      navigation.navigate('WorkoutSummary', {sessionId});
+    } catch (error) {
+      console.warn('[session] failed to end session', error);
+    }
   };
 
   const restCount = sessionExercise.sets.filter(record => typeof record.restActualSec === 'number').length;
@@ -361,7 +383,7 @@ export const SessionScreen = ({navigation, route}: Props): React.JSX.Element => 
         <View style={styles.bottomActions}>
           {!isActionFinished ? (
             <>
-              <Pressable style={styles.mainButton} onPress={onCompleteCurrentSet}>
+              <Pressable style={styles.mainButton} onPress={() => void onCompleteCurrentSet()}>
                 <Text style={styles.mainButtonText}>✓  完成本组</Text>
               </Pressable>
               <View style={styles.adjustRow}>
@@ -455,7 +477,7 @@ export const SessionScreen = ({navigation, route}: Props): React.JSX.Element => 
               <Pressable style={styles.mainButton} onPress={onOpenNextExerciseModal}>
                 <Text style={styles.mainButtonTextSmall}>填写下一个动作  →</Text>
               </Pressable>
-              <Pressable style={styles.ghostButton} onPress={onFinishWorkout}>
+              <Pressable style={styles.ghostButton} onPress={() => void onFinishWorkout()}>
                 <Text style={styles.ghostButtonText}>本次训练完成</Text>
               </Pressable>
               <Pressable
@@ -504,7 +526,11 @@ export const SessionScreen = ({navigation, route}: Props): React.JSX.Element => 
               </Pressable>
               <Pressable
                 style={styles.nameModalConfirm}
-                onPress={actionModalMode === 'current' ? onSaveCurrentExerciseConfig : onAddNextExercise}>
+                onPress={
+                  actionModalMode === 'current'
+                    ? () => void onSaveCurrentExerciseConfig()
+                    : () => void onAddNextExercise()
+                }>
                 <Text style={styles.nameModalConfirmText}>
                   {actionModalMode === 'current' ? '开始训练' : '添加动作'}
                 </Text>

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, {useEffect} from 'react';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 
@@ -14,6 +14,9 @@ import {RestTimerScreen} from '../screens/RestTimerScreen';
 import {SessionScreen} from '../screens/SessionScreen';
 import {WorkoutSummaryScreen} from '../screens/WorkoutSummaryScreen';
 import {useOnboardingStore} from '../store/onboardingStore';
+import {useSessionStore} from '../store/sessionStore';
+import {useSettingsStore} from '../store/settingsStore';
+import {fetchMyGoal, fetchMyProfile} from '../services/meApi';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -75,8 +78,46 @@ const AppTabs = (): React.JSX.Element => (
 
 export const RootNavigator = (): React.JSX.Element => {
   const isLoggedIn = useOnboardingStore(state => state.isLoggedIn);
+  const authToken = useOnboardingStore(state => state.authToken);
+  const hydrateFromServer = useOnboardingStore(state => state.hydrateFromServer);
+  const syncSessionsFromServer = useSessionStore(state => state.syncSessionsFromServer);
+  const syncSettingsFromServer = useSettingsStore(state => state.syncFromServer);
   const routeKey = !isLoggedIn ? 'auth' : 'app';
   const initialRouteName = !isLoggedIn ? 'Login' : 'Home';
+
+  useEffect(() => {
+    if (!isLoggedIn || !authToken) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const bootstrap = async () => {
+      try {
+        const [me, goalPayload] = await Promise.all([
+          fetchMyProfile(authToken),
+          fetchMyGoal(authToken),
+        ]);
+        if (cancelled) {
+          return;
+        }
+
+        hydrateFromServer({
+          email: me.email,
+          goalType: goalPayload.goal?.goalType ?? me.activeGoal?.goalType,
+        });
+
+        await Promise.all([syncSettingsFromServer(), syncSessionsFromServer(50)]);
+      } catch (error) {
+        console.warn('[root] bootstrap sync failed', error);
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken, hydrateFromServer, isLoggedIn, syncSessionsFromServer, syncSettingsFromServer]);
 
   return (
     <Stack.Navigator

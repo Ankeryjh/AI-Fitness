@@ -1,20 +1,27 @@
 import React, {useMemo, useState} from 'react';
 import {Pressable, SafeAreaView, StyleSheet, Text, TextInput, View} from 'react-native';
 
+import {fetchMe, loginByPassword, registerByPassword} from '../services/authApi';
+import {ApiError} from '../services/api';
 import {useOnboardingStore} from '../store/onboardingStore';
 
 type AuthMode = 'login' | 'register';
 
 export const LoginScreen = (): React.JSX.Element => {
-  const login = useOnboardingStore(state => state.login);
+  const setAuthSession = useOnboardingStore(state => state.setAuthSession);
 
   const [mode, setMode] = useState<AuthMode>('login');
   const [account, setAccount] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(true);
+  const [errorText, setErrorText] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const disabled = useMemo(() => {
+    if (isSubmitting) {
+      return true;
+    }
     if (account.trim().length === 0 || password.trim().length === 0) {
       return true;
     }
@@ -22,13 +29,40 @@ export const LoginScreen = (): React.JSX.Element => {
       return true;
     }
     return false;
-  }, [account, confirmPassword, mode, password]);
+  }, [account, confirmPassword, isSubmitting, mode, password]);
 
-  const onSubmit = () => {
+  const onSubmit = async () => {
     if (disabled) {
       return;
     }
-    login(account.trim());
+
+    setErrorText('');
+    setIsSubmitting(true);
+
+    const email = account.trim().toLowerCase();
+    const passwordValue = password;
+
+    try {
+      const auth =
+        mode === 'register'
+          ? await registerByPassword(email, passwordValue)
+          
+          : await loginByPassword(email, passwordValue);
+
+      const me = await fetchMe(auth.token);
+      setAuthSession({
+        email: me.email || auth.user.email,
+        token: auth.token,
+      });
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setErrorText(error.message);
+      } else {
+        setErrorText('登录失败，请稍后重试');
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -43,10 +77,20 @@ export const LoginScreen = (): React.JSX.Element => {
         </View>
 
         <View style={styles.modeTabs}>
-          <Pressable onPress={() => setMode('login')} style={styles.modeTab}>
+          <Pressable
+            onPress={() => {
+              setMode('login');
+              setErrorText('');
+            }}
+            style={styles.modeTab}>
             <Text style={[styles.modeText, mode === 'login' && styles.modeTextActive]}>登录</Text>
           </Pressable>
-          <Pressable onPress={() => setMode('register')} style={styles.modeTab}>
+          <Pressable
+            onPress={() => {
+              setMode('register');
+              setErrorText('');
+            }}
+            style={styles.modeTab}>
             <Text style={[styles.modeText, mode === 'register' && styles.modeTextActive]}>注册</Text>
           </Pressable>
         </View>
@@ -103,8 +147,11 @@ export const LoginScreen = (): React.JSX.Element => {
             onPress={onSubmit}
             style={[styles.loginButton, disabled && styles.loginButtonDisabled]}
             disabled={disabled}>
-            <Text style={styles.loginButtonText}>{mode === 'login' ? '进入应用  →' : '创建账号  →'}</Text>
+            <Text style={styles.loginButtonText}>
+              {isSubmitting ? '提交中...' : mode === 'login' ? '进入应用  →' : '创建账号  →'}
+            </Text>
           </Pressable>
+          {errorText ? <Text style={styles.errorText}>{errorText}</Text> : null}
         </View>
 
         <View style={styles.socialBlock}>
@@ -253,6 +300,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
     letterSpacing: 0.4,
+  },
+  errorText: {
+    marginTop: 8,
+    color: '#C71F37',
+    fontSize: 13,
+    fontWeight: '600',
   },
   socialBlock: {
     marginTop: 'auto',

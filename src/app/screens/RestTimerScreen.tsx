@@ -86,7 +86,7 @@ export const RestTimerScreen = ({navigation, route}: Props): React.JSX.Element =
 
   const completeRestAndReturn = async () => {
     if (!isExerciseFinished) {
-      startNextSet({sessionExerciseId, startedAtMs: Date.now()});
+      await startNextSet({sessionExerciseId, startedAtMs: Date.now()});
     }
     await resetToIdle();
     if (navigation.canGoBack()) {
@@ -101,7 +101,9 @@ export const RestTimerScreen = ({navigation, route}: Props): React.JSX.Element =
       return;
     }
     doneHandledRef.current = true;
-    void completeRestAndReturn();
+    void completeRestAndReturn().catch(error => {
+      console.warn('[rest-timer] failed to auto-complete rest', error);
+    });
   }, [hasStarted, restState, sessionExerciseId, startNextSet, resetToIdle, navigation, isExerciseFinished]);
 
   useEffect(() => {
@@ -125,7 +127,11 @@ export const RestTimerScreen = ({navigation, route}: Props): React.JSX.Element =
 
   const onSkipRest = async () => {
     doneHandledRef.current = true;
-    await completeRestAndReturn();
+    try {
+      await completeRestAndReturn();
+    } catch (error) {
+      console.warn('[rest-timer] failed to skip rest', error);
+    }
   };
 
   return (
@@ -189,7 +195,7 @@ export const RestTimerScreen = ({navigation, route}: Props): React.JSX.Element =
           </>
         )}
 
-        <Pressable onPress={onSkipRest} style={styles.skipButton}>
+        <Pressable onPress={() => void onSkipRest()} style={styles.skipButton}>
           <Text style={styles.skipText}>{hasStarted ? '跳过休息，立即继续' : '跳过休息'}</Text>
         </Pressable>
 

@@ -70,35 +70,48 @@ export const GoalSetupScreen = (): React.JSX.Element => {
     setConfirmVisible(true);
   };
 
-  const startTrainingSession = () => {
+  const startTrainingSession = async () => {
     const preset = goalPresets[goalType];
     let nextSessionExerciseId: string | null = null;
 
-    const currentActiveSession = sessions.find(session => session.id === activeSessionId);
-    if (currentActiveSession?.items[0]) {
-      nextSessionExerciseId = currentActiveSession.items[0].id;
-    } else {
-      if (!activeSessionId) {
-        createSession(goalType);
-      }
-      nextSessionExerciseId = addExerciseToActiveSession(
-        preset.exerciseName,
-        preset.restSec,
-        preset.restSec,
-        4,
-      );
-      if (!nextSessionExerciseId) {
-        const retryActiveSessionId = useSessionStore.getState().activeSessionId;
-        if (!retryActiveSessionId) {
-          createSession(goalType);
+    try {
+      const currentActiveSession = sessions.find(session => session.id === activeSessionId);
+      if (currentActiveSession?.items[0]) {
+        nextSessionExerciseId = currentActiveSession.items[0].id;
+      } else {
+        if (!activeSessionId) {
+          await createSession(goalType);
         }
-        nextSessionExerciseId = useSessionStore
-          .getState()
-          .addExerciseToActiveSession(preset.exerciseName, preset.restSec, preset.restSec, 4);
+
+        nextSessionExerciseId = await addExerciseToActiveSession(
+          preset.exerciseName,
+          preset.restSec,
+          preset.restSec,
+          4,
+        );
+
+        if (!nextSessionExerciseId) {
+          const retryActiveSessionId = useSessionStore.getState().activeSessionId;
+          if (!retryActiveSessionId) {
+            await createSession(goalType);
+          }
+          nextSessionExerciseId = await useSessionStore
+            .getState()
+            .addExerciseToActiveSession(preset.exerciseName, preset.restSec, preset.restSec, 4);
+        }
       }
+    } catch (error) {
+      console.warn('[goal-setup] failed to start training', error);
+      return;
     }
 
-    completeGoalSetup({goalType});
+    try {
+      await completeGoalSetup({goalType});
+    } catch (error) {
+      console.warn('[goal-setup] failed to sync goal', error);
+      return;
+    }
+
     if (nextSessionExerciseId) {
       navigation.navigate('Session', {sessionExerciseId: nextSessionExerciseId});
     }
@@ -189,7 +202,7 @@ export const GoalSetupScreen = (): React.JSX.Element => {
                 style={[styles.modalButton, styles.modalConfirm]}
                 onPress={() => {
                   setConfirmVisible(false);
-                  startTrainingSession();
+                  void startTrainingSession();
                 }}>
                 <Text style={styles.modalConfirmText}>开始训练</Text>
               </Pressable>

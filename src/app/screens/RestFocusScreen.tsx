@@ -115,26 +115,34 @@ export const RestFocusScreen = ({navigation, route}: Props): React.JSX.Element =
   const timerDone = isTimerCurrent && restState === 'DONE';
   const setCount = snapshot.item.sets.length;
 
-  const onSaveRecord = () => {
-    updateSetRecord({
-      sessionExerciseId,
-      setId: latestSet.id,
-      weight: parseNumber(weightInput),
-      reps: parseNumber(repsInput),
-      rpe: latestSet.rpe,
-      note: latestSet.note,
-    });
-    setAnalysisVisible(true);
+  const onSaveRecord = async () => {
+    try {
+      await updateSetRecord({
+        sessionExerciseId,
+        setId: latestSet.id,
+        weight: parseNumber(weightInput),
+        reps: parseNumber(repsInput),
+        rpe: latestSet.rpe,
+        note: latestSet.note,
+      });
+      setAnalysisVisible(true);
+    } catch (error) {
+      console.warn('[rest-focus] failed to save set record', error);
+    }
   };
 
   const onStartNextSet = async () => {
-    startNextSet({sessionExerciseId, startedAtMs: Date.now()});
-    await resetToIdle();
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
+    try {
+      await startNextSet({sessionExerciseId, startedAtMs: Date.now()});
+      await resetToIdle();
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return;
+      }
+      navigation.navigate('Session', {sessionExerciseId});
+    } catch (error) {
+      console.warn('[rest-focus] failed to start next set', error);
     }
-    navigation.navigate('Session', {sessionExerciseId});
   };
 
   const aiTip = useMemo(() => {
@@ -226,7 +234,7 @@ export const RestFocusScreen = ({navigation, route}: Props): React.JSX.Element =
               </View>
             </View>
 
-            <Pressable style={styles.blackButton} onPress={onSaveRecord}>
+            <Pressable style={styles.blackButton} onPress={() => void onSaveRecord()}>
               <Text style={styles.blackButtonText}>✦  AI 分析表现</Text>
             </Pressable>
 
@@ -275,7 +283,7 @@ export const RestFocusScreen = ({navigation, route}: Props): React.JSX.Element =
 
         <Pressable
           style={[styles.blackButton, !timerDone && styles.blackButtonDisabled]}
-          onPress={onStartNextSet}
+          onPress={() => void onStartNextSet()}
           disabled={!timerDone}>
           <Text style={styles.blackButtonText}>{timerDone ? '开始下一组  →' : '等待倒计时结束...'}</Text>
         </Pressable>
